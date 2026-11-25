@@ -1,9 +1,4 @@
-"""LangChain tools for Social Media publishing, scheduling, and analytics.
-
-Provides `@tool` functions and a `SocialMediaTools` wrapper supporting Facebook,
-Instagram, and Twitter/X with stub implementations that validate platform
-constraints and log all actions.
-"""
+"""LangChain tools for Social Media publishing, scheduling, and analytics backed by SQLite."""
 
 from __future__ import annotations
 
@@ -15,37 +10,67 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from src.tools.db_helper import open_sqlite_if_ready
+
 logger = logging.getLogger(__name__)
 
 _SCHEDULED_POSTS: list[dict[str, Any]] = []
 
 
+def _persist_social_post(
+    platform_enum: str,
+    content: str,
+    image_url: str | None = None,
+    status_enum: str = "PUBLISHED",
+    scheduled_at: str | None = None,
+    business_id: int = 1,
+) -> tuple[str, str]:
+    now_iso = datetime.now(UTC).isoformat()
+    with open_sqlite_if_ready("businesses", "social_posts") as conn:
+        if conn is not None:
+            biz = conn.execute(
+                "SELECT id FROM businesses WHERE id = ? LIMIT 1", (business_id,)
+            ).fetchone()
+            if biz is None:
+                biz = conn.execute("SELECT id FROM businesses ORDER BY id ASC LIMIT 1").fetchone()
+            if biz is not None:
+                cur = conn.execute(
+                    """
+                    INSERT INTO social_posts (
+                        business_id, platform, content, image_url, scheduled_at, published_at,
+                        status, engagement_likes, engagement_shares, engagement_comments, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?)
+                    """,
+                    (
+                        biz["id"],
+                        platform_enum,
+                        content,
+                        image_url,
+                        scheduled_at,
+                        now_iso if status_enum == "PUBLISHED" else None,
+                        status_enum,
+                        now_iso,
+                    ),
+                )
+                conn.commit()
+                return str(cur.lastrowid), "database"
+    return f"post_{uuid.uuid4().hex[:10]}", "stub"
+
+
 @tool
 def post_to_facebook(page_id: str, content: str, image_url: str | None = None) -> str:
-    """Publish a post to a business Facebook Page.
-
-    Args:
-        page_id: The Facebook Page ID.
-        content: Text copy for the Facebook post.
-        image_url: Optional image URL to include with the post.
-
-    Returns:
-        JSON string with the created Facebook post ID and permalink.
-    """
+    """Publish a post to a business Facebook Page and persist it to SQLite."""
     if not content or not content.strip():
         return json.dumps({"status": "error", "message": "Facebook post content cannot be empty."})
 
-    post_id = f"{page_id}_{uuid.uuid4().hex[:10]}"
-    logger.info(
-        "[Social Stub] Posted to Facebook page_id=%s post_id=%s has_image=%s",
-        page_id,
-        post_id,
-        bool(image_url),
+    biz_id = int(page_id) if str(page_id).isdigit() else 1
+    post_id, mode = _persist_social_post(
+        "FACEBOOK", content.strip(), image_url, "PUBLISHED", business_id=biz_id
     )
     return json.dumps(
         {
             "status": "published",
-            "mode": "stub",
+            "mode": mode,
             "platform": "facebook",
             "page_id": page_id,
             "post_id": post_id,
@@ -59,16 +84,7 @@ def post_to_facebook(page_id: str, content: str, image_url: str | None = None) -
 
 @tool
 def post_to_instagram(content: str, image_url: str, hashtags: list | None = None) -> str:
-    """Publish a photo post with caption and hashtags to Instagram Business.
-
-    Args:
-        content: Caption text for the Instagram post.
-        image_url: Publicly accessible image URL (required for Instagram feed posts).
-        hashtags: Optional list of hashtag strings (with or without leading `#`).
-
-    Returns:
-        JSON string with the published media ID, formatted caption, and permalink.
-    """
+    """Publish a photo post with caption and hashtags to Instagram Business."""
     if not image_url or not image_url.strip():
         return json.dumps(
             {"status": "error", "message": "Instagram posts require a valid image_url."}
@@ -80,17 +96,11 @@ def post_to_instagram(content: str, image_url: str, hashtags: list | None = None
         if str(tag).strip()
     ]
     full_caption = f"{content.strip()}\n\n{' '.join(formatted_tags)}".strip()
-    media_id = f"ig_{uuid.uuid4().hex[:12]}"
-
-    logger.info(
-        "[Social Stub] Posted to Instagram media_id=%s hashtags=%d",
-        media_id,
-        len(formatted_tags),
-    )
+    media_id, mode = _persist_social_post("INSTAGRAM", full_caption, image_url, "PUBLISHED")
     return json.dumps(
         {
             "status": "published",
-            "mode": "stub",
+            "mode": mode,
             "platform": "instagram",
             "media_id": media_id,
             "image_url": image_url,
@@ -105,15 +115,7 @@ def post_to_instagram(content: str, image_url: str, hashtags: list | None = None
 
 @tool
 def post_to_twitter(content: str, image_url: str | None = None) -> str:
-    """Publish a post to X (Twitter), enforcing the 280-character limit.
-
-    Args:
-        content: Tweet text (must be 280 characters or fewer).
-        image_url: Optional image URL to attach.
-
-    Returns:
-        JSON string with the created tweet ID and URL, or validation error.
-    """
+    """Publish a post to X (Twitter), enforcing the 280-character limit."""
     cleaned = (content or "").strip()
     if not cleaned:
         return json.dumps({"status": "error", "message": "Tweet content cannot be empty."})
@@ -125,17 +127,11 @@ def post_to_twitter(content: str, image_url: str | None = None) -> str:
             }
         )
 
-    tweet_id = str(int(datetime.now(UTC).timestamp() * 1000))
-    logger.info(
-        "[Social Stub] Posted to Twitter/X tweet_id=%s chars=%d has_image=%s",
-        tweet_id,
-        len(cleaned),
-        bool(image_url),
-    )
+    tweet_id, mode = _persist_social_post("TWITTER", cleaned, image_url, "PUBLISHED")
     return json.dumps(
         {
             "status": "published",
-            "mode": "stub",
+            "mode": mode,
             "platform": "twitter",
             "tweet_id": tweet_id,
             "character_count": len(cleaned),
@@ -149,18 +145,9 @@ def post_to_twitter(content: str, image_url: str | None = None) -> str:
 
 @tool
 def schedule_post(platform: str, content: str, scheduled_time: str) -> str:
-    """Schedule a social media post for future publication.
-
-    Args:
-        platform: Target platform (`facebook`, `instagram`, `twitter`, or `google_business`).
-        content: Post copy to publish.
-        scheduled_time: ISO-8601 timestamp string (e.g. `2026-11-28T10:30:00Z`).
-
-    Returns:
-        JSON string confirming the scheduled job ID and execution time.
-    """
+    """Schedule a social media post for future publication in SQLite."""
     normalized = platform.strip().lower()
-    valid_platforms = {"facebook", "instagram", "twitter", "x", "google_business"}
+    valid_platforms = {"facebook", "instagram", "twitter", "x", "google", "google_business"}
     if normalized not in valid_platforms:
         return json.dumps(
             {
@@ -169,107 +156,77 @@ def schedule_post(platform: str, content: str, scheduled_time: str) -> str:
             }
         )
 
-    schedule_id = f"sched_{uuid.uuid4().hex[:10]}"
+    norm_db = (
+        "TWITTER"
+        if normalized in {"twitter", "x"}
+        else ("GOOGLE" if "google" in normalized else normalized.upper())
+    )
+    schedule_id, mode = _persist_social_post(
+        norm_db, content.strip(), None, "SCHEDULED", scheduled_at=scheduled_time
+    )
     entry = {
         "schedule_id": schedule_id,
-        "platform": "twitter" if normalized == "x" else normalized,
+        "platform": norm_db.lower(),
         "content": content,
         "scheduled_time": scheduled_time,
         "status": "scheduled",
         "created_at": datetime.now(UTC).isoformat(),
     }
     _SCHEDULED_POSTS.append(entry)
-
-    logger.info(
-        "[Social Stub] Scheduled post_id=%s platform=%s for %s",
-        schedule_id,
-        entry["platform"],
-        scheduled_time,
-    )
-    return json.dumps({"status": "scheduled", "mode": "stub", **entry}, indent=2)
+    return json.dumps({"status": "scheduled", "mode": mode, **entry}, indent=2)
 
 
 @tool
 def get_social_metrics(platform: str, days: int = 7) -> dict:
-    """Retrieve engagement and reach metrics for a social media platform.
-
-    Args:
-        platform: Platform name (`facebook`, `instagram`, `twitter`, or `all`).
-        days: Number of trailing days to summarize (default 7).
-
-    Returns:
-        Dictionary of impressions, reach, engagement rate, follower growth, and top posts.
-    """
+    """Retrieve engagement and reach metrics from SQLite social posts + platform benchmarks."""
     days = max(1, min(days, 90))
-    scale = days / 7.0
     normalized = platform.strip().lower()
+    live_posts = 0
+    live_likes = 0
+    live_shares = 0
+    live_comments = 0
 
-    platform_baselines = {
-        "facebook": {"impressions": 3420, "engagements": 245, "clicks": 94, "followers_gained": 18},
-        "instagram": {
-            "impressions": 5180,
-            "engagements": 490,
-            "clicks": 132,
-            "followers_gained": 42,
+    with open_sqlite_if_ready("social_posts") as conn:
+        if conn is not None:
+            if normalized == "all":
+                row = conn.execute(
+                    "SELECT COUNT(*) AS cnt, COALESCE(SUM(engagement_likes),0) AS likes, "
+                    "COALESCE(SUM(engagement_shares),0) AS shares, "
+                    "COALESCE(SUM(engagement_comments),0) AS comments FROM social_posts"
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS cnt, COALESCE(SUM(engagement_likes),0) AS likes, "
+                    "COALESCE(SUM(engagement_shares),0) AS shares, "
+                    "COALESCE(SUM(engagement_comments),0) AS comments FROM social_posts WHERE UPPER(platform) = ?",
+                    (normalized.upper(),),
+                ).fetchone()
+            if row:
+                live_posts = row["cnt"]
+                live_likes = row["likes"]
+                live_shares = row["shares"]
+                live_comments = row["comments"]
+
+    total_eng = live_likes + live_shares + live_comments
+    return {
+        "status": "success",
+        "mode": "database",
+        "platform": normalized,
+        "days": days,
+        "live_db_metrics": {
+            "total_posts": live_posts,
+            "likes": live_likes,
+            "shares": live_shares,
+            "comments": live_comments,
+            "total_engagements": total_eng,
         },
-        "twitter": {"impressions": 1950, "engagements": 118, "clicks": 51, "followers_gained": 11},
+        "optimal_posting_windows": ["11:00-12:30", "17:30-19:30"],
     }
-
-    if normalized == "all":
-        breakdown = {}
-        totals = {"impressions": 0, "engagements": 0, "clicks": 0, "followers_gained": 0}
-        for name, base in platform_baselines.items():
-            scaled = {k: int(v * scale) for k, v in base.items()}
-            scaled["engagement_rate_pct"] = round(
-                (scaled["engagements"] / max(scaled["impressions"], 1)) * 100, 2
-            )
-            breakdown[name] = scaled
-            for k in totals:
-                totals[k] += scaled[k]
-        totals["engagement_rate_pct"] = round(
-            (totals["engagements"] / max(totals["impressions"], 1)) * 100, 2
-        )
-        result: dict[str, Any] = {
-            "status": "success",
-            "mode": "stub",
-            "platform": "all",
-            "days": days,
-            "totals": totals,
-            "by_platform": breakdown,
-        }
-    else:
-        base = platform_baselines.get(
-            normalized,
-            {"impressions": 2200, "engagements": 175, "clicks": 60, "followers_gained": 14},
-        )
-        metrics = {k: int(v * scale) for k, v in base.items()}
-        metrics["engagement_rate_pct"] = round(
-            (metrics["engagements"] / max(metrics["impressions"], 1)) * 100, 2
-        )
-        result = {
-            "status": "success",
-            "mode": "stub",
-            "platform": normalized,
-            "days": days,
-            "metrics": metrics,
-            "optimal_posting_windows": ["09:00-11:00", "17:30-19:30"],
-        }
-
-    logger.info("[Social Stub] Retrieved metrics for platform=%s days=%d", normalized, days)
-    return result
 
 
 @tool
 def get_optimal_posting_times(platform: str, business_type: str = "local") -> dict:
-    """Recommend best days and times to post on a social platform for a local business.
-
-    Args:
-        platform: Target platform (`facebook`, `instagram`, `twitter`).
-        business_type: Business category (e.g. `restaurant`, `salon`, `retail`, `local`).
-
-    Returns:
-        Dictionary of recommended days, time windows, and rationale.
-    """
+    """Recommend best days and times to post on a social platform for a local business."""
     recommendations = {
         "facebook": {
             "best_days": ["Wednesday", "Thursday", "Saturday"],
@@ -289,11 +246,6 @@ def get_optimal_posting_times(platform: str, business_type: str = "local") -> di
     }
     normalized = platform.strip().lower()
     data = recommendations.get(normalized, recommendations["instagram"])
-    logger.info(
-        "[Social Stub] Computed optimal times for platform=%s business_type=%s",
-        normalized,
-        business_type,
-    )
     return {"platform": normalized, "business_type": business_type, **data}
 
 

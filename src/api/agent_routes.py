@@ -16,6 +16,7 @@ from src.agents.health_and_growth import (
 )
 from src.agents.orchestrator import BizPresenceOrchestrator
 from src.agents.scheduler import run_autopilot_cycle_for_business
+from src.agents.seo_audit import generate_daily_brief, run_seo_and_sentiment_audit
 from src.agents.supervisor import decide_approval_action
 from src.api.deps import get_business_or_404
 from src.database import get_db
@@ -281,3 +282,27 @@ async def create_multi_channel_campaign(
     )
     await db.commit()
     return CampaignResponse(**result)
+
+
+@router.get("/{business_id}/seo-audit")
+async def get_seo_and_sentiment_audit(
+    business_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Run local SEO NAP check, keyword targeting, and review theme extraction."""
+    business = await get_business_or_404(db, business_id)
+    audit = await run_seo_and_sentiment_audit(db, business)
+    await db.commit()
+    return audit
+
+
+@router.get("/{business_id}/daily-brief")
+async def get_morning_daily_brief(
+    business_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Return an executive Morning AI Briefing for the business owner."""
+    business = await get_business_or_404(db, business_id)
+    brief = await generate_daily_brief(db, business)
+    await db.commit()
+    return brief

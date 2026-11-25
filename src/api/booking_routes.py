@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -174,3 +175,49 @@ async def check_availability(
         duration_minutes=duration_minutes,
     )
     return AvailabilityResponse(**avail)
+
+
+@router.get("/{business_id}/calendar.ics")
+async def export_bookings_ics(
+    business_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Export active bookings as an RFC-5545 .ics calendar file for Google/Apple Calendar."""
+    business = await get_business_or_404(db, business_id)
+    stmt = (
+        select(Booking)
+        .where(
+            Booking.business_id == business_id,
+            Booking.status != BookingStatus.CANCELLED,
+        )
+        .order_by(Booking.booking_date.asc(), Booking.booking_time.asc())
+    )
+    bookings = list((await db.execute(stmt)).scalars().all())
+
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        f"PRODID:-//BizPresence AI//{business.name}//EN",
+        "CALSCALE:GREGORIAN",
+    ]
+    for b in bookings:
+        start_dt = datetime.combine(b.booking_date, b.booking_time)
+        end_dt = start_dt + timedelta(minutes=b.duration_minutes)
+        lines.extend(
+            [
+                "BEGIN:VEVENT",
+                f"UID:booking-{b.id}@bizpresence.local",
+                f"DTSTART:{start_dt.strftime('%Y%m%dT%H%M%S')}",
+                f"DTEND:{end_dt.strftime('%Y%m%dT%H%M%S')}",
+                f"SUMMARY:{b.service} - {b.customer_name}",
+                f"DESCRIPTION:Phone: {b.customer_phone} | Status: {b.status.value}",
+                "END:VEVENT",
+            ]
+        )
+    lines.append("END:VCALENDAR")
+    ics_body = "\r\n".join(lines) + "\r\n"
+    return Response(
+        content=ics_body,
+        media_type="text/calendar",
+        headers={"Content-Disposition": f'attachment; filename="bookings_{business_id}.ics"'},
+    )

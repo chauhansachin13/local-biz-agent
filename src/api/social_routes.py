@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,12 +21,14 @@ from src.models.api_schemas import (
     SocialPostCreateRequest,
     SocialPostScheduleRequest,
 )
+from src.models.review import Review
 from src.models.social_post import (
     PostStatus,
     SocialPlatform,
     SocialPost,
     SocialPostResponse,
 )
+from src.utils.visuals import generate_promo_poster_png
 
 router = APIRouter(prefix="/api/social", tags=["Social Media"])
 social_agent = SocialMediaAgent()
@@ -166,3 +169,37 @@ async def generate_social_content(
         call_to_action=payload.call_to_action,
     )
     return GenerateContentResponse(**result)
+
+
+@router.get("/{business_id}/promo-card.png")
+async def generate_promo_card_image(
+    business_id: int,
+    request: Request,
+    headline: str = Query(default="Special Local Offer"),
+    offer_text: str = Query(default="Scan the QR code to book a slot or order pickup online!"),
+    promo_code: str = Query(default="LOCAL15"),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Render a branded 1080x1080 PNG social/WhatsApp promo card with scannable QR."""
+    business = await get_business_or_404(db, business_id)
+    reviews = list(
+        (await db.execute(select(Review).where(Review.business_id == business_id))).scalars().all()
+    )
+    avg = round(sum(r.rating for r in reviews) / len(reviews), 1) if reviews else 5.0
+    base_url = str(request.base_url).rstrip("/")
+    store_url = f"{base_url}/site/{business_id}"
+    png_bytes = generate_promo_poster_png(
+        business_name=business.name,
+        category=business.category,
+        city=business.city or "",
+        headline=headline,
+        offer_text=offer_text,
+        promo_code=promo_code,
+        storefront_url=store_url,
+        avg_rating=avg,
+    )
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={"Content-Disposition": f'inline; filename="promo_{business_id}.png"'},
+    )

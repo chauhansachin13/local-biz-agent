@@ -342,3 +342,112 @@ async def test_magic_onboard_campaign_health_and_autopilot(
     ap_resp = await test_client.post(f"/api/agent/{biz_id}/autopilot/run")
     assert ap_resp.status_code == 200
     assert ap_resp.json()["autopilot_enabled"] is True
+
+
+async def test_whatsapp_concierge_promo_png_qr_ics_review_submit_and_brief(
+    test_client: AsyncClient,
+    sample_business: Business,
+    sample_review: Review,
+    sample_booking: Booking,
+) -> None:
+    """Verify WhatsApp concierge, promo PNG, QR/poster, ICS export, review submit, SEO audit & brief."""
+    # 1. Public review submission -> auto sentiment + HITL draft
+    rev_sub = await test_client.post(
+        f"/api/reviews/{sample_business.id}/submit",
+        json={
+            "reviewer_name": "Karan Mehta",
+            "rating": 2,
+            "review_text": "Wait was too long and food arrived cold.",
+            "platform": "storefront",
+        },
+    )
+    assert rev_sub.status_code == 201
+    assert rev_sub.json()["sentiment"] == "negative"
+
+    ap_list = await test_client.get(
+        f"/api/agent/{sample_business.id}/approvals", params={"status": "pending"}
+    )
+    assert ap_list.status_code == 200
+    assert len(ap_list.json()) >= 1
+
+    # 2. WhatsApp customer booking & order + owner command
+    wa_book = await test_client.post(
+        f"/api/whatsapp/{sample_business.id}/message",
+        json={
+            "sender_phone": "+91 98765 11111",
+            "sender_name": "Neha",
+            "sender_role": "customer",
+            "message": "Book tomorrow at 11:00",
+        },
+    )
+    assert wa_book.status_code == 200
+    assert "Confirmed" in wa_book.json()["reply"]
+
+    wa_order = await test_client.post(
+        f"/api/whatsapp/{sample_business.id}/message",
+        json={
+            "sender_phone": "+91 98765 11111",
+            "sender_name": "Neha",
+            "sender_role": "customer",
+            "message": "Order 2 Signature Combo for pickup",
+        },
+    )
+    assert wa_order.status_code == 200
+    assert "order" in wa_order.json()["reply"].lower()
+
+    wa_owner = await test_client.post(
+        f"/api/whatsapp/{sample_business.id}/message",
+        json={
+            "sender_phone": "+91 98765 99999",
+            "sender_name": "Owner",
+            "sender_role": "owner",
+            "message": "Give me an analytics summary",
+        },
+    )
+    assert wa_owner.status_code == 200
+    assert "OwnerSupervisor" in wa_owner.json()["agent_used"]
+
+    wa_hist = await test_client.get(f"/api/whatsapp/{sample_business.id}/messages")
+    assert wa_hist.status_code == 200
+    assert len(wa_hist.json()) == 6
+
+    # 3. Promo card PNG, SVG QR, Printable Poster, ICS Export
+    png_resp = await test_client.get(
+        f"/api/social/{sample_business.id}/promo-card.png",
+        params={"headline": "Fresh Bread!", "promo_code": "BREAD15"},
+    )
+    assert png_resp.status_code == 200
+    assert png_resp.headers["content-type"] == "image/png"
+    assert png_resp.content[:4] == b"\x89PNG"
+
+    qr_resp = await test_client.get(f"/site/{sample_business.id}/qr")
+    assert qr_resp.status_code == 200
+    assert "<svg" in qr_resp.text
+
+    poster_resp = await test_client.get(f"/site/{sample_business.id}/poster")
+    assert poster_resp.status_code == 200
+    assert "Print Counter Poster" in poster_resp.text
+
+    ics_resp = await test_client.get(f"/api/bookings/{sample_business.id}/calendar.ics")
+    assert ics_resp.status_code == 200
+    assert "BEGIN:VCALENDAR" in ics_resp.text
+    assert "BEGIN:VEVENT" in ics_resp.text
+
+    # 4. SEO Audit & Morning Daily Brief
+    seo_resp = await test_client.get(f"/api/agent/{sample_business.id}/seo-audit")
+    assert seo_resp.status_code == 200
+    assert len(seo_resp.json()["target_local_keywords"]) >= 3
+
+    brief_resp = await test_client.get(f"/api/agent/{sample_business.id}/daily-brief")
+    assert brief_resp.status_code == 200
+    assert "metrics" in brief_resp.json()
+
+    # 5. Quality Critic trace on LangGraph supervisor
+    chat_resp = await test_client.post(
+        f"/api/agent/{sample_business.id}/chat",
+        json={"message": "Create a twitter post about fresh croissants"},
+    )
+    assert chat_resp.status_code == 200
+    agents_used = [t["agent"] for t in chat_resp.json()["agent_trace"]]
+    assert "QualityCriticAgent" in agents_used
+    assert chat_resp.json()["data"]["quality_score"] >= 70

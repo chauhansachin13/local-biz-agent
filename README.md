@@ -23,12 +23,14 @@ Local shops, restaurants, salons, and neighborhood service providers often lose 
 
 **BizPresence AI** solves this end-to-end with a complete **LangGraph Multi-Agent System**:
 - **60-Second Digital Launch Wizard:** Enter shop name, category, city, and phone → AI builds an SEO bio, Google Business checklist, catalog/menu, and 3 starter social posts in one click.
-- **LangGraph Multi-Agent Supervisor:** Decomposes compound natural-language commands into ordered tasks, executes specialist agents & tools, and returns a transparent step-by-step trace.
+- **LangGraph Multi-Agent Supervisor + Quality Critic:** Decomposes compound natural-language commands into ordered tasks, executes SQLite-backed specialist agents & tools, and runs a **Self-Reflection Quality Critic** (`critic_node`) to enforce character limits, brand tone, and empathetic customer care.
 - **Persistent Conversational Memory:** Remembers prior turns per business session in SQLite (`AgentThreadMessage`).
 - **Human-in-the-Loop (HITL) Safety Guardrails:** High-risk actions (such as ≤2★ negative review replies) or Copilot drafts are queued in an **Approval Inbox** so owners can review, edit, approve, or reject with one click.
 - **Autonomous APScheduler Autopilot:** Background worker automatically publishes due scheduled posts and triages new pending reviews every 5 minutes (or on-demand).
-- **Digital Presence Health Score (0–100):** Scores Google Profile, Reviews, Social Presence, Bookings/Orders, and SEO/Catalog readiness with one-click fixes.
-- **Instant Customer Storefront (`/site/{business_id}`):** Mobile-friendly public web page where customers can browse services/menu, book appointments, or place online pickup/delivery orders directly into the business's queue.
+- **WhatsApp Business Concierge:** Handles inbound WhatsApp messages from customers (hours, open slots, instant bookings, pickup/delivery orders) and owner commands.
+- **Branded Promo Graphics & Scannable QR Posters:** Generates 1080×1080 Pillow PNG promo cards with embedded QR codes plus print-ready counter QR flyers (`/site/{id}/poster`).
+- **Digital Presence Health Score (0–100) & Morning Brief:** Scores 5 pillars, runs local SEO & review theme audits, and produces a daily executive brief.
+- **Instant Customer Storefront (`/site/{business_id}`):** Mobile-friendly public web page where customers can browse services/menu, book appointments, place online pickup/delivery orders, and submit reviews—plus `.ics` calendar export.
 - **Multi-Language Support:** Generate posts and review replies in English, Hindi, Hinglish, Spanish, or French.
 
 ---

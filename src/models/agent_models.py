@@ -184,6 +184,26 @@ class OrderRequest(Base):
     )
 
 
+class WhatsAppMessage(Base):
+    """WhatsApp / SMS concierge conversation log for customers and owners."""
+
+    __tablename__ = "whatsapp_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True)
+    business_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sender_phone: Mapped[str] = mapped_column(String(30), nullable=False)
+    sender_name: Mapped[str] = mapped_column(String(120), nullable=False, default="Guest")
+    sender_role: Mapped[str] = mapped_column(String(20), nullable=False, default="customer")
+    direction: Mapped[str] = mapped_column(String(20), nullable=False, default="inbound")
+    message_text: Mapped[str] = mapped_column(Text, nullable=False)
+    agent_used: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now
+    )
+
+
 # ---------------------------------------------------------------------------
 # Pydantic Schemas
 # ---------------------------------------------------------------------------
@@ -318,4 +338,29 @@ class OrderResponse(BaseModel):
     fulfillment_type: FulfillmentType
     status: OrderStatus
     notes: str | None = None
+    created_at: datetime
+
+
+class WhatsAppInboundRequest(BaseModel):
+    """Inbound WhatsApp message payload (customer inquiry or owner command)."""
+
+    sender_phone: str = Field(default="+91 98765 43210", min_length=5, max_length=30)
+    sender_name: str = Field(default="Guest", min_length=1, max_length=120)
+    sender_role: str = Field(default="customer", pattern="^(customer|owner)$")
+    message: str = Field(..., min_length=1)
+
+
+class WhatsAppMessageResponse(BaseModel):
+    """Stored WhatsApp conversation entry."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    business_id: int
+    sender_phone: str
+    sender_name: str
+    sender_role: str
+    direction: str
+    message_text: str
+    agent_used: str | None = None
     created_at: datetime

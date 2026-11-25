@@ -1,12 +1,12 @@
-"""Customer-facing public microsite storefront supporting direct bookings and online orders."""
+"""Customer-facing public microsite storefront, QR code, printable counter poster, and review form."""
 
 from __future__ import annotations
 
 import html
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import HTMLResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,8 +14,74 @@ from src.agents.health_and_growth import get_or_create_agent_config
 from src.api.deps import get_business_or_404
 from src.database import get_db
 from src.models.review import Review
+from src.utils.visuals import generate_qr_svg
 
 router = APIRouter(tags=["Public Storefront"])
+
+
+@router.get("/site/{business_id}/qr")
+async def storefront_qr_svg(
+    business_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Return a scannable SVG QR code pointing to the business's public storefront."""
+    await get_business_or_404(db, business_id)
+    base_url = str(request.base_url).rstrip("/")
+    svg = generate_qr_svg(f"{base_url}/site/{business_id}")
+    return Response(
+        content=svg,
+        media_type="image/svg+xml",
+        headers={"Content-Disposition": f'inline; filename="storefront_{business_id}_qr.svg"'},
+    )
+
+
+@router.get("/site/{business_id}/poster", response_class=HTMLResponse)
+async def storefront_printable_poster(
+    business_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> HTMLResponse:
+    """Render a print-ready counter flyer/poster with a scannable QR code."""
+    business = await get_business_or_404(db, business_id)
+    base_url = str(request.base_url).rstrip("/")
+    store_url = f"{base_url}/site/{business_id}"
+    svg_qr = generate_qr_svg(store_url)
+    name_esc = html.escape(business.name)
+    cat_esc = html.escape(business.category.title())
+    city_esc = html.escape(business.city or "Local Business")
+
+    poster_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>{name_esc} — Printable Counter QR Poster</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #e2e8f0; margin: 0; padding: 2rem; display: flex; justify-content: center; }}
+    .poster {{ background: #ffffff; max-width: 560px; width: 100%; border-radius: 24px; padding: 2.5rem 2rem; text-align: center; box-shadow: 0 12px 32px rgba(15,23,42,0.12); border: 4px solid #1e3a8a; }}
+    h1 {{ margin: 0.25rem 0; font-size: 2.1rem; color: #0f172a; }}
+    .tag {{ display: inline-block; background: #dbeafe; color: #1e40af; padding: 0.3rem 0.9rem; border-radius: 999px; font-weight: 700; font-size: 0.85rem; }}
+    .qr-box {{ margin: 1.5rem auto; width: 240px; height: 240px; padding: 14px; border: 2px dashed #94a3b8; border-radius: 16px; display: flex; align-items: center; justify-content: center; }}
+    .qr-box svg {{ width: 100%; height: 100%; }}
+    .cta {{ font-size: 1.2rem; font-weight: 700; color: #1e3a8a; margin-bottom: 0.4rem; }}
+    .url {{ color: #64748b; font-size: 0.9rem; word-break: break-all; }}
+    @media print {{ body {{ background: #fff; padding: 0; }} .no-print {{ display: none; }} }}
+    button {{ margin-top: 1.25rem; background: #1e3a8a; color: #fff; border: none; padding: 0.7rem 1.4rem; border-radius: 10px; font-weight: 600; cursor: pointer; font-size: 1rem; }}
+  </style>
+</head>
+<body>
+  <div class="poster">
+    <span class="tag">{cat_esc} • {city_esc}</span>
+    <h1>{name_esc}</h1>
+    <p style="color:#475569;">Scan with your phone camera to connect with us instantly!</p>
+    <div class="qr-box">{svg_qr}</div>
+    <div class="cta">📅 Book • 🛒 Order Pickup • ⭐ Leave a Review</div>
+    <div class="url">{html.escape(store_url)}</div>
+    <button class="no-print" onclick="window.print()">🖨️ Print Counter Poster</button>
+  </div>
+</body>
+</html>"""
+    return HTMLResponse(content=poster_html)
 
 
 @router.get("/site/{business_id}", response_class=HTMLResponse)
@@ -23,7 +89,7 @@ async def public_business_storefront(
     business_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> HTMLResponse:
-    """Serve a shareable, mobile-friendly public storefront with online booking and ordering."""
+    """Serve a shareable, mobile-friendly public storefront with bookings, orders, and reviews."""
     business = await get_business_or_404(db, business_id)
     cfg = await get_or_create_agent_config(db, business_id)
     reviews = list(
@@ -32,7 +98,7 @@ async def public_business_storefront(
                 select(Review)
                 .where(Review.business_id == business_id)
                 .order_by(Review.rating.desc(), Review.created_at.desc())
-                .limit(4)
+                .limit(5)
             )
         )
         .scalars()
@@ -103,7 +169,7 @@ async def public_business_storefront(
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{name_esc} — Book & Order Online</title>
+  <title>{name_esc} — Book, Order & Review</title>
   <style>
     * {{ box-sizing: border-box; }}
     body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; background: #f8fafc; color: #0f172a; line-height: 1.5; }}
@@ -182,6 +248,29 @@ async def public_business_storefront(
         </form>
       </section>
     </div>
+
+    <section class="card" id="review">
+      <h2>⭐ Leave Us a Customer Review</h2>
+      <form id="reviewForm">
+        <div class="grid-2">
+          <div><label>Your Name *</label><input id="revName" required placeholder="Alex Morgan" /></div>
+          <div>
+            <label>Rating *</label>
+            <select id="revRating">
+              <option value="5">★★★★★ (5 - Excellent)</option>
+              <option value="4">★★★★☆ (4 - Good)</option>
+              <option value="3">★★★☆☆ (3 - Okay)</option>
+              <option value="2">★★☆☆☆ (2 - Needs Improvement)</option>
+              <option value="1">★☆☆☆☆ (1 - Poor)</option>
+            </select>
+          </div>
+        </div>
+        <label>Your Feedback *</label>
+        <textarea id="revText" rows="3" required placeholder="Tell us about your visit..."></textarea>
+        <button type="submit">Submit Review</button>
+        <div id="revMsg" class="msg"></div>
+      </form>
+    </section>
   </main>
 
   <script>
@@ -241,6 +330,30 @@ async def public_business_storefront(
       }} else {{
         msg.className = 'msg err';
         msg.textContent = data.detail || 'Could not place order.';
+      }}
+    }});
+
+    document.getElementById('reviewForm').addEventListener('submit', async (e) => {{
+      e.preventDefault();
+      const msg = document.getElementById('revMsg');
+      msg.className = 'msg';
+      const resp = await fetch(`/api/reviews/${{BIZ_ID}}/submit`, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{
+          reviewer_name: document.getElementById('revName').value,
+          rating: parseInt(document.getElementById('revRating').value, 10),
+          review_text: document.getElementById('revText').value,
+          platform: 'storefront'
+        }})
+      }});
+      const data = await resp.json();
+      if (resp.ok) {{
+        msg.className = 'msg ok';
+        msg.textContent = `Thank you for your ${{data.rating}}★ review! Our AI manager has logged it.`;
+      }} else {{
+        msg.className = 'msg err';
+        msg.textContent = data.detail || 'Could not submit review.';
       }}
     }});
   </script>

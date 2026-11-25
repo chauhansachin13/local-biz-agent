@@ -729,6 +729,60 @@ async def run_supervisor_turn(
             "health_score": health["overall_score"],
         }
 
+    async def critic_node(state: SupervisorState) -> SupervisorState:
+        """Self-reflection quality critic verifying brand voice, length limits, and empathy."""
+        trace = list(state.get("agent_trace") or [])
+        data = dict(state.get("data") or {})
+        issues_fixed: list[str] = []
+        score = 96
+
+        # 1. Inspect generated social post for platform character limits & CTA
+        gen = data.get("generated_post")
+        if isinstance(gen, dict):
+            plat = str(gen.get("platform", "")).lower()
+            content = str(gen.get("content", ""))
+            if plat == "twitter" and len(content) > 280:
+                gen["content"] = content[:276].rstrip() + "..."
+                issues_fixed.append("Trimmed Twitter/X post to <=280 characters")
+                score -= 4
+            if business.name.lower() not in content.lower():
+                gen["content"] = f"{content.rstrip()} — {business.name}"
+                issues_fixed.append("Added business brand mention to social copy")
+                score -= 2
+            data["generated_post"] = gen
+
+        # 2. Inspect review reply drafts for empathy & non-defensive phrasing
+        drafts = data.get("drafts")
+        if isinstance(drafts, list):
+            defensive_terms = ("your fault", "you are wrong", "not our problem")
+            for d in drafts:
+                txt = str(d.get("draft", ""))
+                if any(term in txt.lower() for term in defensive_terms):
+                    d["draft"] = (
+                        f"Thank you for your feedback. At {business.name}, we take every guest's "
+                        "experience seriously and would love to discuss this directly with you."
+                    )
+                    issues_fixed.append("Rewrote defensive phrasing into empathetic reply")
+                    score -= 6
+
+        data["quality_score"] = max(70, score)
+        trace.append(
+            {
+                "agent": "QualityCriticAgent",
+                "tool": "self_reflect_and_validate",
+                "status": "completed",
+                "detail": (
+                    f"Quality score {data['quality_score']}/100 — "
+                    + (
+                        "; ".join(issues_fixed)
+                        if issues_fixed
+                        else "All brand & safety checks passed."
+                    )
+                ),
+            }
+        )
+        return {"agent_trace": trace, "data": data}
+
     async def synthesize_node(state: SupervisorState) -> SupervisorState:
         combined_reply = "\n\n---\n\n".join(state.get("section_replies") or [])
         plan = state.get("plan") or ["general"]
@@ -779,10 +833,12 @@ async def run_supervisor_turn(
     graph = StateGraph(SupervisorState)
     graph.add_node("planner", plan_node)
     graph.add_node("executor", execute_node)
+    graph.add_node("critic", critic_node)
     graph.add_node("synthesizer", synthesize_node)
     graph.add_edge(START, "planner")
     graph.add_edge("planner", "executor")
-    graph.add_edge("executor", "synthesizer")
+    graph.add_edge("executor", "critic")
+    graph.add_edge("critic", "synthesizer")
     graph.add_edge("synthesizer", END)
 
     compiled = graph.compile()

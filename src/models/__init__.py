@@ -20,6 +20,9 @@ from src.models.agent_models import (
     OrderStatus,
     OrderStatusUpdate,
     RiskLevel,
+    WhatsAppInboundRequest,
+    WhatsAppMessage,
+    WhatsAppMessageResponse,
 )
 from src.models.api_schemas import (
     ActivityItem,
@@ -156,4 +159,7 @@ __all__ = [
     "SocialPostResponse",
     "SocialPostScheduleRequest",
     "SocialPostUpdate",
+    "WhatsAppInboundRequest",
+    "WhatsAppMessage",
+    "WhatsAppMessageResponse",
 ]

@@ -36,6 +36,8 @@ setup(
         "streamlit>=1.39.0",
         "pandas>=2.0.0",
         "plotly>=5.20.0",
+        "pillow>=10.4.0",
+        "qrcode>=8.0",
         "httpx>=0.27.2",
     ],
     extras_require={

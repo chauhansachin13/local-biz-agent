@@ -6,12 +6,15 @@ from collections import Counter
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.agents.health_and_growth import get_or_create_agent_config
 from src.agents.review_agent import ReviewAgent
 from src.api.deps import get_business_or_404
 from src.database import get_db
+from src.models.agent_models import AgentApprovalAction, ApprovalStatus, RiskLevel
 from src.models.api_schemas import (
     AutoRespondRequest,
     AutoRespondResponse,
@@ -19,6 +22,7 @@ from src.models.api_schemas import (
     ReviewRespondRequest,
 )
 from src.models.review import ResponseStatus, Review, ReviewResponse, Sentiment
+from src.tools.review_tools import analyze_review_sentiment, flag_critical_review
 
 router = APIRouter(prefix="/api/reviews", tags=["Reviews"])
 review_agent = ReviewAgent()
@@ -182,6 +186,85 @@ async def respond_to_review(
     review.responded_at = datetime.now(UTC)
     if review.sentiment is None:
         review.sentiment = review_agent.analyze_sentiment(review.rating, review.review_text)
+
+    await db.commit()
+    await db.refresh(review)
+    return review
+
+
+class ReviewSubmitRequest(BaseModel):
+    """Customer review submission payload from public storefront or external webhook."""
+
+    reviewer_name: str = Field(..., min_length=1, max_length=255)
+    rating: int = Field(..., ge=1, le=5)
+    review_text: str | None = None
+    platform: str = Field(default="storefront", max_length=50)
+
+
+@router.post(
+    "/{business_id}/submit",
+    response_model=ReviewResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def submit_customer_review(
+    business_id: int,
+    payload: ReviewSubmitRequest,
+    db: AsyncSession = Depends(get_db),
+) -> Review:
+    """Ingest a customer review, analyze sentiment, and trigger HITL or auto-reply."""
+    business = await get_business_or_404(db, business_id)
+    cfg = await get_or_create_agent_config(db, business_id)
+    sentiment = review_agent.analyze_sentiment(payload.rating, payload.review_text)
+    now = datetime.now(UTC)
+
+    review = Review(
+        business_id=business_id,
+        platform=payload.platform.strip().lower(),
+        reviewer_name=payload.reviewer_name.strip(),
+        rating=payload.rating,
+        review_text=payload.review_text,
+        sentiment=sentiment,
+        response_status=ResponseStatus.PENDING,
+        created_at=now,
+    )
+    db.add(review)
+    await db.flush()
+
+    sent_detail = analyze_review_sentiment.invoke({"review_text": payload.review_text or ""})
+    if sent_detail.get("requires_escalation"):
+        flag_critical_review.invoke(
+            {
+                "platform": review.platform,
+                "review_id": str(review.id),
+                "reason": "Critical trigger detected on incoming storefront review",
+                "severity": "high",
+            }
+        )
+
+    draft = await review_agent.draft_response(
+        business=business,
+        review=review,
+        tone=cfg.brand_voice,
+        language=cfg.preferred_language,
+    )
+    if review.rating >= 4 and cfg.auto_reply_positive_reviews:
+        review.response_text = draft
+        review.response_status = ResponseStatus.RESPONDED
+        review.responded_at = now
+    else:
+        db.add(
+            AgentApprovalAction(
+                business_id=business_id,
+                action_type="reply_review",
+                title=f"Reply to {review.reviewer_name} ({review.rating}★ {review.platform.title()})",
+                description=review.review_text or "(Rating only)",
+                agent_name="ReviewWatchdogAgent",
+                reasoning="New incoming review analyzed and reply drafted for owner approval.",
+                risk_level=RiskLevel.HIGH if review.rating <= 2 else RiskLevel.LOW,
+                payload={"review_id": review.id, "response_text": draft},
+                status=ApprovalStatus.PENDING,
+            )
+        )
 
     await db.commit()
     await db.refresh(review)

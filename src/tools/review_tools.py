@@ -1,9 +1,4 @@
-"""LangChain tools for cross-platform customer review monitoring and response.
-
-Provides `@tool` functions and a `ReviewTools` wrapper for fetching Google and
-Facebook reviews, analyzing sentiment, responding to reviews, and flagging
-critical feedback for human escalation.
-"""
+"""LangChain tools for customer review monitoring, sentiment analysis, and response backed by SQLite."""
 
 from __future__ import annotations
 
@@ -14,6 +9,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from langchain_core.tools import tool
+
+from src.tools.db_helper import open_sqlite_if_ready
 
 logger = logging.getLogger(__name__)
 
@@ -83,168 +80,116 @@ _FLAGGED_REVIEWS: list[dict[str, Any]] = []
 _REVIEW_RESPONSES: dict[str, dict[str, Any]] = {}
 
 
+def _fetch_platform_reviews_from_db(platform: str, limit: int) -> list[dict[str, Any]] | None:
+    with open_sqlite_if_ready("reviews") as conn:
+        if conn is None:
+            return None
+        rows = conn.execute(
+            """
+            SELECT id, business_id, platform, reviewer_name, rating, review_text,
+                   response_text, response_status, sentiment, created_at
+            FROM reviews
+            WHERE LOWER(platform) = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (platform.lower(), max(1, limit)),
+        ).fetchall()
+        if not rows:
+            return None
+        return [
+            {
+                "review_id": str(r["id"]),
+                "business_id": r["business_id"],
+                "platform": r["platform"],
+                "author": r["reviewer_name"],
+                "rating": r["rating"],
+                "text": r["review_text"] or "",
+                "replied": str(r["response_status"]).upper() == "RESPONDED",
+                "reply": r["response_text"],
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+
+
 @tool
 def fetch_google_reviews(location_id: str, limit: int = 20) -> list:
-    """Fetch recent customer reviews from Google Business Profile.
-
-    Args:
-        location_id: Google Business Profile location ID.
-        limit: Maximum number of reviews to return (default 20).
-
-    Returns:
-        List of review dictionaries containing `review_id`, `author`, `rating`,
-        `text`, `created_at`, and `replied`.
-    """
-    sample_reviews = [
+    """Fetch recent customer reviews from Google (from SQLite DB if present, else fallback)."""
+    db_rows = _fetch_platform_reviews_from_db("google", limit)
+    if db_rows is not None:
+        return db_rows
+    return [
         {
             "review_id": "g_rev_101",
             "platform": "google",
             "location_id": location_id,
             "author": "Sarah Jenkins",
             "rating": 5,
-            "text": "Absolutely wonderful experience! The staff was friendly, fast, and super attentive.",
+            "text": "Absolutely wonderful experience! Staff was friendly and fast.",
             "created_at": "2026-11-24T16:20:00Z",
             "replied": False,
-        },
-        {
-            "review_id": "g_rev_102",
-            "platform": "google",
-            "location_id": location_id,
-            "author": "Marcus Vance",
-            "rating": 2,
-            "text": "Waited 40 minutes past my scheduled time and the front desk seemed overwhelmed and rude.",
-            "created_at": "2026-11-23T19:05:00Z",
-            "replied": False,
-        },
-        {
-            "review_id": "g_rev_103",
-            "platform": "google",
-            "location_id": location_id,
-            "author": "Elena Rostova",
-            "rating": 4,
-            "text": "Great quality and clean space. Parking was a little tight, otherwise fantastic.",
-            "created_at": "2026-11-21T11:45:00Z",
-            "replied": True,
-        },
-        {
-            "review_id": "g_rev_104",
-            "platform": "google",
-            "location_id": location_id,
-            "author": "David Kim",
-            "rating": 1,
-            "text": "Unacceptable billing mistake and no one called back about my refund request.",
-            "created_at": "2026-11-20T09:10:00Z",
-            "replied": False,
-        },
-    ]
-    results = sample_reviews[: max(1, limit)]
-    for rev in results:
-        if rev["review_id"] in _REVIEW_RESPONSES:
-            rev["replied"] = True
-            rev["reply"] = _REVIEW_RESPONSES[rev["review_id"]]["response"]
-
-    logger.info(
-        "[Review Stub] Fetched %d Google reviews for location_id=%s",
-        len(results),
-        location_id,
-    )
-    return results
+        }
+    ][: max(1, limit)]
 
 
 @tool
 def fetch_facebook_reviews(page_id: str, limit: int = 20) -> list:
-    """Fetch recent customer recommendations and reviews from a Facebook Page.
-
-    Args:
-        page_id: Facebook Page ID.
-        limit: Maximum number of reviews to return (default 20).
-
-    Returns:
-        List of Facebook review dictionaries.
-    """
-    sample_reviews = [
+    """Fetch recent customer recommendations and reviews from Facebook (SQLite DB if present)."""
+    db_rows = _fetch_platform_reviews_from_db("facebook", limit)
+    if db_rows is not None:
+        return db_rows
+    return [
         {
             "review_id": "fb_rev_201",
             "platform": "facebook",
             "page_id": page_id,
             "author": "Hannah Lopez",
             "rating": 5,
-            "recommendation_type": "positive",
             "text": "Love this place! Consistently great service and welcoming atmosphere.",
             "created_at": "2026-11-24T12:00:00Z",
             "replied": False,
-        },
-        {
-            "review_id": "fb_rev_202",
-            "platform": "facebook",
-            "page_id": page_id,
-            "author": "Trevor Patel",
-            "rating": 3,
-            "recommendation_type": "neutral",
-            "text": "Service was polite and clean, though prices felt slightly high for what was included.",
-            "created_at": "2026-11-19T15:30:00Z",
-            "replied": False,
-        },
-    ]
-    results = sample_reviews[: max(1, limit)]
-    for rev in results:
-        if rev["review_id"] in _REVIEW_RESPONSES:
-            rev["replied"] = True
-            rev["reply"] = _REVIEW_RESPONSES[rev["review_id"]]["response"]
-
-    logger.info(
-        "[Review Stub] Fetched %d Facebook reviews for page_id=%s",
-        len(results),
-        page_id,
-    )
-    return results
+        }
+    ][: max(1, limit)]
 
 
 @tool
 def respond_to_review(platform: str, review_id: str, response: str) -> str:
-    """Post an official business reply to a customer review on Google or Facebook.
-
-    Args:
-        platform: Review platform (`google` or `facebook`).
-        review_id: Unique review identifier.
-        response: Reply message written on behalf of the business.
-
-    Returns:
-        JSON string confirming reply publication.
-    """
+    """Post an official business reply to a customer review and persist in SQLite if matched."""
     if not response or not response.strip():
         return json.dumps({"status": "error", "message": "Review response text cannot be empty."})
 
+    now_iso = datetime.now(UTC).isoformat()
+    mode = "stub"
+    if str(review_id).isdigit():
+        with open_sqlite_if_ready("reviews") as conn:
+            if conn is not None:
+                row = conn.execute(
+                    "SELECT id FROM reviews WHERE id = ?", (int(review_id),)
+                ).fetchone()
+                if row is not None:
+                    conn.execute(
+                        "UPDATE reviews SET response_text = ?, response_status = 'RESPONDED', responded_at = ? WHERE id = ?",
+                        (response.strip(), now_iso, int(review_id)),
+                    )
+                    conn.commit()
+                    mode = "database"
+
     record = {
         "status": "published",
-        "mode": "stub",
+        "mode": mode,
         "platform": platform.strip().lower(),
         "review_id": review_id,
         "response": response.strip(),
-        "responded_at": datetime.now(UTC).isoformat(),
+        "responded_at": now_iso,
     }
     _REVIEW_RESPONSES[review_id] = record
-
-    logger.info(
-        "[Review Stub] Posted reply to platform=%s review_id=%s",
-        record["platform"],
-        review_id,
-    )
     return json.dumps(record, indent=2)
 
 
 @tool
 def analyze_review_sentiment(review_text: str) -> dict:
-    """Analyze the sentiment, urgency, and escalation risk of a customer review.
-
-    Args:
-        review_text: Raw review body text.
-
-    Returns:
-        Dictionary with `sentiment` (`positive`, `neutral`, or `negative`),
-        `score` (-1.0 to 1.0), `requires_escalation` (bool), `matched_themes`,
-        and `recommended_action`.
-    """
+    """Analyze the sentiment, urgency, and escalation risk of a customer review."""
     normalized = (review_text or "").lower()
     tokens = set(re.findall(r"[a-z']+", normalized))
 
@@ -275,7 +220,7 @@ def analyze_review_sentiment(review_text: str) -> dict:
         )
     )
 
-    result = {
+    return {
         "sentiment": sentiment,
         "score": round(raw_score, 3),
         "positive_signals": pos_hits,
@@ -284,28 +229,20 @@ def analyze_review_sentiment(review_text: str) -> dict:
         "requires_escalation": requires_escalation,
         "recommended_action": recommended_action,
     }
-    logger.info(
-        "[Review] Sentiment analyzed: sentiment=%s score=%.3f escalate=%s",
-        sentiment,
-        result["score"],
-        requires_escalation,
-    )
-    return result
 
 
 @tool
 def flag_critical_review(platform: str, review_id: str, reason: str, severity: str = "high") -> str:
-    """Flag a critical negative review for immediate human manager attention.
+    """Flag a critical negative review in SQLite (`FLAGGED`) and escalation log."""
+    if str(review_id).isdigit():
+        with open_sqlite_if_ready("reviews") as conn:
+            if conn is not None:
+                conn.execute(
+                    "UPDATE reviews SET response_status = 'FLAGGED' WHERE id = ? AND response_status = 'PENDING'",
+                    (int(review_id),),
+                )
+                conn.commit()
 
-    Args:
-        platform: Platform where the review was posted (`google` or `facebook`).
-        review_id: Unique review identifier.
-        reason: Explanation of why human escalation is needed.
-        severity: Escalation severity (`medium`, `high`, or `critical`).
-
-    Returns:
-        JSON string confirming the escalation ticket.
-    """
     ticket = {
         "status": "flagged",
         "platform": platform.strip().lower(),
@@ -315,44 +252,43 @@ def flag_critical_review(platform: str, review_id: str, reason: str, severity: s
         "flagged_at": datetime.now(UTC).isoformat(),
     }
     _FLAGGED_REVIEWS.append(ticket)
-    logger.warning(
-        "[Review Escalation] Flagged review_id=%s platform=%s severity=%s reason=%s",
-        review_id,
-        ticket["platform"],
-        ticket["severity"],
-        reason,
-    )
+    logger.warning("[Review Escalation] Flagged review_id=%s reason=%s", review_id, reason)
     return json.dumps(ticket, indent=2)
 
 
 @tool
 def get_review_trends(business_id: str, days: int = 30) -> dict:
-    """Summarize review volume, average rating, response rate, and sentiment trends.
+    """Summarize review volume, average rating, response rate, and sentiment from SQLite."""
+    biz_int = int(business_id) if str(business_id).isdigit() else 1
+    with open_sqlite_if_ready("reviews") as conn:
+        if conn is not None:
+            rows = conn.execute(
+                "SELECT rating, sentiment, response_status FROM reviews WHERE business_id = ?",
+                (biz_int,),
+            ).fetchall()
+            if rows:
+                total = len(rows)
+                avg = round(sum(r["rating"] for r in rows) / total, 2)
+                responded = sum(1 for r in rows if str(r["response_status"]).upper() == "RESPONDED")
+                pos = sum(1 for r in rows if str(r["sentiment"]).upper() == "POSITIVE")
+                neu = sum(1 for r in rows if str(r["sentiment"]).upper() == "NEUTRAL")
+                neg = sum(1 for r in rows if str(r["sentiment"]).upper() == "NEGATIVE")
+                return {
+                    "business_id": str(business_id),
+                    "days": days,
+                    "average_rating": avg,
+                    "total_reviews": total,
+                    "response_rate_pct": round((responded / total) * 100, 1),
+                    "sentiment_breakdown": {"positive": pos, "neutral": neu, "negative": neg},
+                }
 
-    Args:
-        business_id: Local business identifier.
-        days: Trailing time window in days (default 30).
-
-    Returns:
-        Dictionary of review KPIs and recurring customer themes.
-    """
-    logger.info(
-        "[Review Stub] Calculated review trends for business_id=%s days=%d", business_id, days
-    )
     return {
         "business_id": str(business_id),
         "days": days,
         "average_rating": 4.3,
-        "rating_delta": 0.2,
-        "total_reviews": 28,
-        "response_rate_pct": 85.7,
-        "sentiment_breakdown": {"positive": 21, "neutral": 4, "negative": 3},
-        "top_praised_themes": ["friendly staff", "cleanliness", "service quality"],
-        "top_improvement_areas": [
-            "wait times during peak hours",
-            "parking clarity",
-            "billing follow-up",
-        ],
+        "total_reviews": 0,
+        "response_rate_pct": 0.0,
+        "sentiment_breakdown": {"positive": 0, "neutral": 0, "negative": 0},
     }
 
 

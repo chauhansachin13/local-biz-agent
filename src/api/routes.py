@@ -17,6 +17,7 @@ from src.api import (
     review_routes,
     social_routes,
     storefront_routes,
+    whatsapp_routes,
 )
 from src.database import get_db
 
@@ -46,4 +47,5 @@ api_router.include_router(review_routes.router)
 api_router.include_router(booking_routes.router)
 api_router.include_router(order_routes.router)
 api_router.include_router(agent_routes.router)
+api_router.include_router(whatsapp_routes.router)
 api_router.include_router(storefront_routes.router)

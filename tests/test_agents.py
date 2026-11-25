@@ -5,18 +5,57 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.agents.analytics_agent import create_analytics_agent
 from src.agents.booking_agent import BookingAgent
+from src.agents.content_generator import create_content_agent
+from src.agents.google_business import create_google_business_agent
 from src.agents.health_and_growth import compute_health_score
 from src.agents.orchestrator import BizPresenceOrchestrator
 from src.agents.review_agent import ReviewAgent
+from src.agents.review_manager import create_review_agent
+from src.agents.seo_audit import generate_daily_brief, run_seo_and_sentiment_audit
 from src.agents.social_agent import SocialMediaAgent
+from src.agents.social_media import create_social_media_agent
 from src.agents.supervisor import _detect_intents_offline
 from src.models.review import Sentiment
-from src.tools.analytics_tools import aggregate_platform_metrics
-from src.tools.content_tools import generate_post_ideas, generate_promotional_offer
-from src.tools.google_tools import get_business_insights, update_business_profile
-from src.tools.review_tools import analyze_review_sentiment
+from src.tools.analytics_tools import (
+    aggregate_platform_metrics,
+    generate_performance_report,
+    identify_trends,
+    suggest_data_improvements,
+)
+from src.tools.content_tools import (
+    create_content_calendar,
+    generate_blog_outline,
+    generate_post_ideas,
+    generate_promotional_offer,
+)
+from src.tools.google_tools import (
+    get_business_insights,
+    handle_business_qa,
+    manage_business_photos,
+    post_google_update,
+    update_business_hours,
+    update_business_profile,
+)
+from src.tools.review_tools import (
+    analyze_review_sentiment,
+    fetch_facebook_reviews,
+    fetch_google_reviews,
+    flag_critical_review,
+    get_review_trends,
+    respond_to_review,
+)
+from src.tools.social_tools import (
+    get_optimal_posting_times,
+    get_social_metrics,
+    post_to_facebook,
+    post_to_instagram,
+    post_to_twitter,
+    schedule_post,
+)
 from src.utils.helpers import format_phone, generate_slug, truncate_text, validate_email
+from src.utils.visuals import generate_promo_poster_png, generate_qr_svg
 
 # ---------------------------------------------------------------------------
 # Helper / Utility Tests
@@ -240,3 +279,101 @@ def test_orchestrator_classifies_booking_intent() -> None:
     assert (
         orchestrator._classify_intent("what appointments do we have tomorrow") == "booking_manage"
     )
+
+
+def test_social_content_and_review_tool_suites() -> None:
+    """Exercise social, content, GBP, review, and analytics LangChain tools."""
+    assert "published" in post_to_facebook.invoke(
+        {"page_id": "pg1", "content": "Hello local fans!"}
+    )
+    assert "error" in post_to_instagram.invoke({"content": "Photo", "image_url": ""})
+    assert "published" in post_to_instagram.invoke(
+        {"content": "Fresh coffee", "image_url": "https://img.local/1.jpg", "hashtags": ["Coffee"]}
+    )
+    assert "error" in post_to_twitter.invoke({"content": "x" * 300})
+    assert "published" in post_to_twitter.invoke({"content": "Open till 9 PM!"})
+    assert "scheduled" in schedule_post.invoke(
+        {"platform": "instagram", "content": "Promo", "scheduled_time": "2026-12-01T10:00:00Z"}
+    )
+    assert "live_db_metrics" in get_social_metrics.invoke({"platform": "all", "days": 7})
+    assert "best_days" in get_optimal_posting_times.invoke({"platform": "instagram"})
+
+    assert "calendar" in create_content_calendar.invoke({"business_id": "1", "weeks": 2})
+    assert "seo_titles" in generate_blog_outline.invoke(
+        {"topic": "Fresh Bread", "business_name": "Sunrise Bakery"}
+    )
+    assert "published" in post_google_update.invoke(
+        {"location_id": "loc_1", "content": "Open today!"}
+    )
+    assert "success" in update_business_hours.invoke(
+        {"location_id": "loc_1", "hours": {"monday": "09:00-18:00"}}
+    )
+    assert "added" in manage_business_photos.invoke(
+        {"location_id": "loc_1", "action": "add", "photo_url": "https://img.local/a.jpg"}
+    )
+    assert "questions" in handle_business_qa.invoke({"location_id": "loc_1", "action": "list"})
+
+    assert isinstance(fetch_google_reviews.invoke({"location_id": "loc_1"}), list)
+    assert isinstance(fetch_facebook_reviews.invoke({"page_id": "pg_1"}), list)
+    assert "published" in respond_to_review.invoke(
+        {"platform": "google", "review_id": "g_1", "response": "Thank you!"}
+    )
+    assert "flagged" in flag_critical_review.invoke(
+        {"platform": "google", "review_id": "g_2", "reason": "Cold food"}
+    )
+    assert "average_rating" in get_review_trends.invoke({"business_id": "1"})
+
+    assert "executive_summary" in generate_performance_report.invoke({"business_id": "1"})
+    assert "trends" in identify_trends.invoke({"business_id": "1"})
+    assert isinstance(suggest_data_improvements.invoke({"business_id": "1"}), list)
+
+
+def test_visuals_qr_and_promo_poster() -> None:
+    """Verify SVG QR generation and Pillow 1080x1080 PNG promo poster generation."""
+    svg = generate_qr_svg("http://localhost:8000/site/1")
+    assert "<svg" in svg
+    png = generate_promo_poster_png(
+        business_name="Chai Junction",
+        category="Cafe",
+        city="Pune",
+        headline="Monsoon Special",
+        offer_text="15% off all chai combos!",
+        promo_code="CHAI15",
+        storefront_url="http://localhost:8000/site/1",
+    )
+    assert png[:4] == b"\x89PNG"
+    assert len(png) > 5000
+
+
+@pytest.mark.asyncio
+async def test_seo_audit_and_daily_brief(db_session, sample_business, sample_review) -> None:
+    """Verify local SEO audit and morning executive daily brief."""
+    audit = await run_seo_and_sentiment_audit(db_session, sample_business)
+    assert "target_local_keywords" in audit
+    assert audit["nap_consistency_score"] > 0
+
+    brief = await generate_daily_brief(db_session, sample_business)
+    assert brief["business_id"] == sample_business.id
+    assert "priority_action" in brief
+
+
+def test_langgraph_react_agent_factories_wire_cleanly() -> None:
+    """Verify all 5 LangGraph ReAct agent factories build with mocked ChatGoogleGenerativeAI."""
+    mock_agent = MagicMock()
+    with (
+        patch("src.agents.google_business.ChatGoogleGenerativeAI"),
+        patch("src.agents.google_business.create_react_agent", return_value=mock_agent),
+        patch("src.agents.social_media.ChatGoogleGenerativeAI"),
+        patch("src.agents.social_media.create_react_agent", return_value=mock_agent),
+        patch("src.agents.review_manager.ChatGoogleGenerativeAI"),
+        patch("src.agents.review_manager.create_react_agent", return_value=mock_agent),
+        patch("src.agents.content_generator.ChatGoogleGenerativeAI"),
+        patch("src.agents.content_generator.create_react_agent", return_value=mock_agent),
+        patch("src.agents.analytics_agent.ChatGoogleGenerativeAI"),
+        patch("src.agents.analytics_agent.create_react_agent", return_value=mock_agent),
+    ):
+        assert create_google_business_agent() is mock_agent
+        assert create_social_media_agent() is mock_agent
+        assert create_review_agent() is mock_agent
+        assert create_content_agent() is mock_agent
+        assert create_analytics_agent() is mock_agent

@@ -1,92 +1,97 @@
-"""LangChain tools for cross-platform digital presence analytics and reporting.
-
-Provides `@tool` functions and an `AnalyticsTools` wrapper that aggregate
-metrics across Google Business Profile, social media, reviews, and SQLite
-bookings to generate performance reports and actionable recommendations.
-"""
+"""LangChain tools for cross-platform digital presence analytics backed by real SQLite data."""
 
 from __future__ import annotations
 
 import logging
-import sqlite3
 from datetime import date, timedelta
-from pathlib import Path
 from typing import Any
 
 from langchain_core.tools import tool
 
-from config.settings import settings
+from src.tools.db_helper import open_sqlite_if_ready
 
 logger = logging.getLogger(__name__)
 
 
-def _resolve_sqlite_path() -> Path:
-    """Resolve SQLite database path from `config.settings`."""
-    explicit = getattr(settings, "SQLITE_DB_PATH", None)
-    if explicit:
-        return Path(explicit)
-    db_url = getattr(settings, "database_url", "sqlite:///./bizpresence.db")
-    for prefix in ("sqlite+aiosqlite:///", "sqlite:///"):
-        if db_url.startswith(prefix):
-            raw = db_url.removeprefix(prefix)
-            return Path(raw) if raw and raw != ":memory:" else Path("./bizpresence.db")
-    return Path("./bizpresence.db")
-
-
-def _query_booking_stats(business_id: int) -> dict[str, int]:
-    """Read live booking counts from SQLite if the database exists."""
-    db_path = _resolve_sqlite_path()
-    if not db_path.exists():
-        return {"total_bookings": 0, "confirmed_bookings": 0, "cancelled_bookings": 0}
-
-    conn = sqlite3.connect(str(db_path))
-    try:
-        table_exists = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='bookings'"
-        ).fetchone()
-        if not table_exists:
-            return {"total_bookings": 0, "confirmed_bookings": 0, "cancelled_bookings": 0}
-
-        total = conn.execute(
-            "SELECT COUNT(*) FROM bookings WHERE business_id = ?", (business_id,)
-        ).fetchone()[0]
-        confirmed = conn.execute(
-            "SELECT COUNT(*) FROM bookings WHERE business_id = ? AND status = 'confirmed'",
-            (business_id,),
-        ).fetchone()[0]
-        cancelled = conn.execute(
-            "SELECT COUNT(*) FROM bookings WHERE business_id = ? AND status = 'cancelled'",
-            (business_id,),
-        ).fetchone()[0]
-        return {
-            "total_bookings": total,
-            "confirmed_bookings": confirmed,
-            "cancelled_bookings": cancelled,
+def _query_live_db_stats(business_id: int) -> dict[str, Any]:
+    """Read live counts across bookings, reviews, social posts, and orders."""
+    stats: dict[str, Any] = {
+        "bookings": {"total": 0, "confirmed": 0, "cancelled": 0},
+        "reviews": {"total": 0, "avg_rating": 0.0, "pending": 0},
+        "social_posts": {"total": 0, "published": 0, "scheduled": 0, "total_engagement": 0},
+        "orders": {"total": 0, "revenue": 0.0},
+    }
+    with open_sqlite_if_ready("businesses") as conn:
+        if conn is None:
+            return stats
+        existing = {
+            r[0]
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
-    finally:
-        conn.close()
+        if "bookings" in existing:
+            stats["bookings"]["total"] = conn.execute(
+                "SELECT COUNT(*) FROM bookings WHERE business_id = ?", (business_id,)
+            ).fetchone()[0]
+            stats["bookings"]["confirmed"] = conn.execute(
+                "SELECT COUNT(*) FROM bookings WHERE business_id = ? AND LOWER(status) = 'confirmed'",
+                (business_id,),
+            ).fetchone()[0]
+            stats["bookings"]["cancelled"] = conn.execute(
+                "SELECT COUNT(*) FROM bookings WHERE business_id = ? AND LOWER(status) = 'cancelled'",
+                (business_id,),
+            ).fetchone()[0]
+        if "reviews" in existing:
+            rrow = conn.execute(
+                "SELECT COUNT(*) AS cnt, COALESCE(AVG(rating),0) AS avg_r FROM reviews WHERE business_id = ?",
+                (business_id,),
+            ).fetchone()
+            pend = conn.execute(
+                "SELECT COUNT(*) FROM reviews WHERE business_id = ? AND LOWER(response_status) = 'pending'",
+                (business_id,),
+            ).fetchone()[0]
+            stats["reviews"] = {
+                "total": rrow["cnt"],
+                "avg_rating": round(float(rrow["avg_r"]), 2),
+                "pending": pend,
+            }
+        if "social_posts" in existing:
+            srow = conn.execute(
+                "SELECT COUNT(*) AS cnt, COALESCE(SUM(engagement_likes + engagement_shares + engagement_comments),0) AS eng "
+                "FROM social_posts WHERE business_id = ?",
+                (business_id,),
+            ).fetchone()
+            pub = conn.execute(
+                "SELECT COUNT(*) FROM social_posts WHERE business_id = ? AND LOWER(status) = 'published'",
+                (business_id,),
+            ).fetchone()[0]
+            sched = conn.execute(
+                "SELECT COUNT(*) FROM social_posts WHERE business_id = ? AND LOWER(status) = 'scheduled'",
+                (business_id,),
+            ).fetchone()[0]
+            stats["social_posts"] = {
+                "total": srow["cnt"],
+                "published": pub,
+                "scheduled": sched,
+                "total_engagement": srow["eng"],
+            }
+        if "order_requests" in existing:
+            orow = conn.execute(
+                "SELECT COUNT(*) AS cnt, COALESCE(SUM(total_amount),0) AS rev FROM order_requests WHERE business_id = ?",
+                (business_id,),
+            ).fetchone()
+            stats["orders"] = {"total": orow["cnt"], "revenue": round(float(orow["rev"]), 2)}
+    return stats
 
 
 @tool
 def aggregate_platform_metrics(business_id: str, days: int = 30) -> dict:
-    """Aggregate KPIs across Google Business, social media, reviews, and bookings.
-
-    Args:
-        business_id: Local business identifier.
-        days: Trailing aggregation window in days (default 30).
-
-    Returns:
-        Dictionary summarizing cross-channel reach, engagement, ratings, and bookings.
-    """
+    """Aggregate live DB and channel KPIs across Google Business, social, reviews, bookings, and orders."""
     days = max(1, min(days, 365))
     scale = days / 30.0
-    try:
-        biz_int = int(business_id)
-    except (TypeError, ValueError):
-        biz_int = 1
+    biz_int = int(business_id) if str(business_id).isdigit() else 1
+    live = _query_live_db_stats(biz_int)
 
-    booking_stats = _query_booking_stats(biz_int)
-    payload: dict[str, Any] = {
+    return {
         "business_id": str(business_id),
         "days": days,
         "google_business": {
@@ -96,108 +101,59 @@ def aggregate_platform_metrics(business_id: str, days: int = 30) -> dict:
             "website_clicks": int(418 * scale),
         },
         "social_media": {
-            "total_impressions": int(45200 * scale),
-            "total_engagements": int(3650 * scale),
-            "avg_engagement_rate_pct": 8.08,
-            "new_followers": int(304 * scale),
+            "live_posts": live["social_posts"]["total"],
+            "published_posts": live["social_posts"]["published"],
+            "scheduled_posts": live["social_posts"]["scheduled"],
+            "total_engagements": live["social_posts"]["total_engagement"],
         },
-        "reviews": {
-            "average_rating": 4.3,
-            "new_reviews": max(1, int(28 * scale)),
-            "response_rate_pct": 85.7,
-        },
-        "bookings": {
-            "live_db_stats": booking_stats,
-            "estimated_period_bookings": max(booking_stats["confirmed_bookings"], int(96 * scale)),
-        },
+        "reviews": live["reviews"],
+        "bookings": live["bookings"],
+        "orders": live["orders"],
     }
-
-    logger.info(
-        "[Analytics] Aggregated cross-platform metrics for business_id=%s days=%d",
-        business_id,
-        days,
-    )
-    return payload
 
 
 @tool
 def generate_performance_report(business_id: str, period: str = "weekly") -> dict:
-    """Generate a structured weekly or monthly digital presence performance report.
-
-    Args:
-        business_id: Local business identifier.
-        period: Reporting cadence (`weekly` or `monthly`).
-
-    Returns:
-        Dictionary containing executive summary, channel highlights, and KPI deltas.
-    """
+    """Generate a structured weekly or monthly digital presence performance report."""
     normalized = period.strip().lower()
     days = 7 if normalized == "weekly" else 30
     end_dt = date.today()
     start_dt = end_dt - timedelta(days=days)
     metrics = aggregate_platform_metrics.invoke({"business_id": str(business_id), "days": days})
 
-    report = {
+    return {
         "business_id": str(business_id),
         "period": normalized,
         "date_range": {"start": start_dt.isoformat(), "end": end_dt.isoformat()},
         "executive_summary": (
-            f"Over the past {days} days, overall visibility grew +11.6% led by Google Maps "
-            f"discovery and Instagram engagement. Review sentiment remains healthy at 4.3/5."
+            f"Summary for last {days} days: {metrics['reviews']['total']} reviews "
+            f"({metrics['reviews']['avg_rating']}★ avg), {metrics['social_posts']['total'] if 'social_posts' in metrics else metrics['social_media']['live_posts']} social posts, "
+            f"and {metrics['bookings']['confirmed']} confirmed bookings."
         ),
         "metrics": metrics,
-        "highlights": [
-            "Google Business direction requests increased 15.2% vs. prior period.",
-            "Instagram outperformed Facebook on engagement rate (9.4% vs 7.1%).",
-            "28 reviews collected with an 85.7% owner response rate.",
-        ],
     }
-    logger.info(
-        "[Analytics] Generated %s report for business_id=%s",
-        normalized,
-        business_id,
-    )
-    return report
 
 
 @tool
 def identify_trends(business_id: str, metric_category: str = "all", days: int = 30) -> dict:
-    """Identify upward, downward, and seasonal trends across engagement, reviews, and bookings.
-
-    Args:
-        business_id: Local business identifier.
-        metric_category: Category to inspect (`engagement`, `reviews`, `bookings`, or `all`).
-        days: Trailing lookback window in days (default 30).
-
-    Returns:
-        Dictionary detailing detected positive trends, watchouts, and anomalies.
-    """
+    """Identify upward, downward, and seasonal trends across engagement, reviews, and bookings."""
     category = metric_category.strip().lower()
     all_trends = {
         "engagement": [
-            "Short-form video posts drove 2.3x more reach than static graphics.",
+            "Behind-the-scenes local posts and Reels drive stronger neighborhood reach.",
             "Peak local audience activity occurs Thursdays 17:30-19:30 and Saturdays 10:00-12:00.",
         ],
         "reviews": [
-            "Average rating improved +0.2 stars over the last 30 days.",
-            "3 recent negative mentions clustered around weekend wait times.",
+            "Fast, empathetic replies to sub-3-star reviews lift repeat customer conversion.",
         ],
         "bookings": [
-            "Thursday and Friday afternoon slots fill 90% faster than Monday mornings.",
-            "Google Business Profile 'Book' CTA contributed 38% of new appointments.",
+            "Midweek off-peak promos help smooth Friday-Saturday peak utilization.",
         ],
     }
-
     selected = (
         all_trends
         if category == "all"
         else {category: all_trends.get(category, all_trends["engagement"])}
-    )
-    logger.info(
-        "[Analytics] Identified trends for business_id=%s category=%s days=%d",
-        business_id,
-        category,
-        days,
     )
     return {
         "business_id": str(business_id),
@@ -211,55 +167,44 @@ def identify_trends(business_id: str, metric_category: str = "all", days: int = 
 def suggest_data_improvements(
     business_id: str, focus_area: str = "overall"
 ) -> list[dict[str, str]]:
-    """Recommend prioritized, data-backed improvements to grow local presence and conversions.
+    """Recommend prioritized, data-backed improvements based on live database metrics."""
+    biz_int = int(business_id) if str(business_id).isdigit() else 1
+    live = _query_live_db_stats(biz_int)
+    recs: list[dict[str, str]] = []
 
-    Args:
-        business_id: Local business identifier.
-        focus_area: Area to optimize (`overall`, `visibility`, `reviews`, `bookings`, `social`).
-
-    Returns:
-        List of prioritized recommendation objects with `priority`, `area`, `action`, and `expected_impact`.
-    """
-    recommendations = [
+    if live["reviews"]["pending"] > 0:
+        recs.append(
+            {
+                "priority": "high",
+                "area": "reviews",
+                "action": f"Respond to {live['reviews']['pending']} pending customer review(s) via the Approval Inbox or AI Reply.",
+                "expected_impact": "Higher Google Maps trust and +0.2 star lift.",
+            }
+        )
+    if live["social_posts"]["scheduled"] == 0:
+        recs.append(
+            {
+                "priority": "high",
+                "area": "social",
+                "action": "Launch a multi-channel scheduled campaign for the next 7 days.",
+                "expected_impact": "+30% consistent local discovery.",
+            }
+        )
+    recs.append(
         {
-            "priority": "high",
-            "area": "reviews",
-            "action": "Respond to all unanswered 1-3 star reviews within 24 hours and address peak-hour wait times.",
-            "expected_impact": "+0.2 to +0.3 star rating lift and higher conversion from Google Search.",
-        },
-        {
-            "priority": "high",
+            "priority": "medium",
             "area": "bookings",
-            "action": "Launch a midweek (Mon/Tue morning) 15% promo on Google Business Updates and Instagram Stories.",
-            "expected_impact": "+20% utilization during off-peak appointment hours.",
-        },
-        {
-            "priority": "medium",
-            "area": "social",
-            "action": "Shift 50% of static posts to short behind-the-scenes Reels posted Thu/Sat.",
-            "expected_impact": "+30-45% organic local reach.",
-        },
-        {
-            "priority": "medium",
-            "area": "visibility",
-            "action": "Upload 5 fresh interior/team photos and answer open GBP Q&A questions.",
-            "expected_impact": "+10-15% Google Maps direction requests.",
-        },
-    ]
+            "action": "Share your public storefront QR poster at checkout to drive repeat online bookings & pickup orders.",
+            "expected_impact": "+20% direct commission-free orders.",
+        }
+    )
 
     area = focus_area.strip().lower()
     if area != "overall":
-        filtered = [r for r in recommendations if r["area"] == area]
+        filtered = [r for r in recs if r["area"] == area]
         if filtered:
-            recommendations = filtered
-
-    logger.info(
-        "[Analytics] Generated %d recommendations for business_id=%s focus=%s",
-        len(recommendations),
-        business_id,
-        area,
-    )
-    return recommendations
+            return filtered
+    return recs
 
 
 class AnalyticsTools:
