@@ -314,7 +314,9 @@
     }
 
     function renderRichText(text) {
-      return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      return escapeHtml(text)
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*([^*\n]+?)\*/g, '<em>$1</em>');
     }
 
     function saveApiUrl() {
@@ -350,6 +352,7 @@
     }
 
     async function refreshActiveBusiness() {
+      document.getElementById('councilOutput').innerHTML = '';
       await loadHome();
       await loadChatHistory();
       await loadApprovals();
