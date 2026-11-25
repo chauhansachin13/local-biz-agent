@@ -26,6 +26,7 @@ from src.models.agent_models import (
     OrderRequest,
     OrderStatus,
     RiskLevel,
+    WhatsAppMessage,
 )
 from src.models.booking import Booking, BookingStatus
 from src.models.business import Business
@@ -928,6 +929,24 @@ async def decide_approval_action(
                 rev.response_status = ResponseStatus.RESPONDED
                 rev.responded_at = now
                 payload["response_text"] = response_text
+
+    elif action.action_type == "send_loyalty_offer":
+        msg_text = (edited_content or payload.get("content") or "").strip()
+        phone = str(payload.get("phone") or "on-file")
+        cust_name = str(payload.get("customer_name") or "Customer")
+        if msg_text:
+            db.add(
+                WhatsAppMessage(
+                    business_id=business.id,
+                    sender_phone=phone,
+                    sender_name=cust_name,
+                    sender_role="assistant",
+                    direction="outbound",
+                    message_text=msg_text,
+                    agent_used="LoyaltyRetentionAgent (Approved)",
+                )
+            )
+            payload["content"] = msg_text
 
     action.payload = payload
     action.status = ApprovalStatus.EXECUTED

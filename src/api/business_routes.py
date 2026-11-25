@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import uuid
 from datetime import UTC, date, datetime, timedelta
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_business_or_404
 from src.database import get_db
+from src.models.agent_models import CustomerProfile, OrderRequest
 from src.models.api_schemas import (
     ActivityItem,
     DashboardOverviewResponse,
@@ -239,4 +243,151 @@ async def get_business_dashboard(
         total_engagement=total_engagement,
         google_profile_status="verified" if business.google_business_id else "not_configured",
         recent_activity=activities[:10],
+    )
+
+
+@router.get("/{business_id}/export")
+async def export_business_csv(
+    business_id: int,
+    dataset: str = Query(default="bookings", pattern="^(bookings|orders|reviews|customers)$"),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Export business bookings, online orders, reviews, or CRM customers as CSV."""
+    await get_business_or_404(db, business_id)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+
+    if dataset == "bookings":
+        rows = list(
+            (await db.execute(select(Booking).where(Booking.business_id == business_id)))
+            .scalars()
+            .all()
+        )
+        writer.writerow(
+            [
+                "id",
+                "customer_name",
+                "customer_phone",
+                "customer_email",
+                "service",
+                "date",
+                "time",
+                "duration_min",
+                "status",
+            ]
+        )
+        for b in rows:
+            writer.writerow(
+                [
+                    b.id,
+                    b.customer_name,
+                    b.customer_phone,
+                    b.customer_email,
+                    b.service,
+                    b.booking_date,
+                    b.booking_time,
+                    b.duration_minutes,
+                    b.status.value,
+                ]
+            )
+    elif dataset == "orders":
+        rows = list(
+            (await db.execute(select(OrderRequest).where(OrderRequest.business_id == business_id)))
+            .scalars()
+            .all()
+        )
+        writer.writerow(
+            [
+                "id",
+                "customer_name",
+                "customer_phone",
+                "fulfillment",
+                "total_amount",
+                "status",
+                "created_at",
+            ]
+        )
+        for o in rows:
+            writer.writerow(
+                [
+                    o.id,
+                    o.customer_name,
+                    o.customer_phone,
+                    o.fulfillment_type.value,
+                    o.total_amount,
+                    o.status.value,
+                    o.created_at,
+                ]
+            )
+    elif dataset == "reviews":
+        rows = list(
+            (await db.execute(select(Review).where(Review.business_id == business_id)))
+            .scalars()
+            .all()
+        )
+        writer.writerow(
+            [
+                "id",
+                "platform",
+                "reviewer_name",
+                "rating",
+                "sentiment",
+                "status",
+                "review_text",
+                "response_text",
+            ]
+        )
+        for r in rows:
+            writer.writerow(
+                [
+                    r.id,
+                    r.platform,
+                    r.reviewer_name,
+                    r.rating,
+                    r.sentiment.value if r.sentiment else "",
+                    r.response_status.value,
+                    r.review_text or "",
+                    r.response_text or "",
+                ]
+            )
+    else:
+        rows = list(
+            (
+                await db.execute(
+                    select(CustomerProfile).where(CustomerProfile.business_id == business_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        writer.writerow(
+            [
+                "id",
+                "name",
+                "phone",
+                "email",
+                "segment",
+                "visit_count",
+                "total_spent",
+                "loyalty_points",
+            ]
+        )
+        for c in rows:
+            writer.writerow(
+                [
+                    c.id,
+                    c.name,
+                    c.phone or "",
+                    c.email or "",
+                    c.segment,
+                    c.visit_count,
+                    c.total_spent,
+                    c.loyalty_points,
+                ]
+            )
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="biz_{business_id}_{dataset}.csv"'},
     )

@@ -32,6 +32,10 @@ Local shops, restaurants, salons, and neighborhood service providers often lose 
 - **Digital Presence Health Score (0–100) & Morning Brief:** Scores 5 pillars, runs local SEO & review theme audits, and produces a daily executive brief.
 - **Instant Customer Storefront (`/site/{business_id}`):** Mobile-friendly public web page where customers can browse services/menu, book appointments, place online pickup/delivery orders, and submit reviews—plus `.ics` calendar export.
 - **Multi-Language Support:** Generate posts and review replies in English, Hindi, Hinglish, Spanish, or French.
+- **Multi-Agent Strategy Council & Festival Planner:** 3 specialist agents (Growth, Reputation, Operations) debate metrics to synthesize a consensus weekly plan + seasonal promo calendar.
+- **Customer CRM, Loyalty & Competitor Watch:** Auto-builds unified VIP/Regular/New profiles, queues personalized retention offers, tracks nearby competitors, and recommends counter-strategies.
+- **A/B Social Variants, Voice Commands & CSV Exports:** Compares Storytelling vs Offer variants, supports voice transcripts, and exports Bookings/Orders/Reviews/CRM CSVs.
+- **Standalone Web App (`/app`) & Multi-Cloud Deploy:** Deployable to **GitHub Pages**, **Netlify** (`netlify.toml`), **Render** (`render.yaml`), **Railway/Heroku** (`Procfile`), or **Docker**.
 
 ---
 
@@ -127,9 +131,18 @@ python3 -m uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 streamlit run dashboard/app.py --server.port 8501
 ```
 
-- **Dashboard UI:** `http://localhost:8501`
+- **Web App UI:** `http://localhost:8000/app`
+- **Streamlit Dashboard:** `http://localhost:8501`
 - **API Docs (Swagger):** `http://localhost:8000/docs`
 - **Sample Public Storefront:** `http://localhost:8000/site/1`
+
+### 🌐 Deploy Online (GitHub Pages, Netlify & Render)
+
+| Platform | Target | Config |
+| :--- | :--- | :--- |
+| **GitHub Pages** | Live Web App (`web/`) with Sandbox + Live API connector | [.github/workflows/pages.yml](./.github/workflows/pages.yml) |
+| **Netlify** | Web App + Edge Functions + `/api/*` & `/site/*` proxy | [netlify.toml](./netlify.toml), [netlify/functions/health.mjs](./netlify/functions/health.mjs) |
+| **Render / Railway** | Full FastAPI Backend + Storefront + APScheduler | [render.yaml](./render.yaml), [Procfile](./Procfile) |
 
 ### 🐳 Docker Compose
 

@@ -11,11 +11,13 @@ from src.agents.content_generator import create_content_agent
 from src.agents.google_business import create_google_business_agent
 from src.agents.health_and_growth import compute_health_score
 from src.agents.orchestrator import BizPresenceOrchestrator
+from src.agents.react_bridge import run_react_specialist
 from src.agents.review_agent import ReviewAgent
 from src.agents.review_manager import create_review_agent
 from src.agents.seo_audit import generate_daily_brief, run_seo_and_sentiment_audit
 from src.agents.social_agent import SocialMediaAgent
 from src.agents.social_media import create_social_media_agent
+from src.agents.strategy_council import get_upcoming_festivals, run_strategy_council
 from src.agents.supervisor import _detect_intents_offline
 from src.models.review import Sentiment
 from src.tools.analytics_tools import (
@@ -377,3 +379,19 @@ def test_langgraph_react_agent_factories_wire_cleanly() -> None:
         assert create_review_agent() is mock_agent
         assert create_content_agent() is mock_agent
         assert create_analytics_agent() is mock_agent
+
+
+@pytest.mark.asyncio
+async def test_strategy_council_and_react_bridge(
+    db_session, sample_business, sample_review
+) -> None:
+    """Verify Multi-Agent Strategy Council, festivals, and ReAct bridge offline behavior."""
+    council = await run_strategy_council(db_session, sample_business)
+    assert len(council["council_members"]) == 3
+    assert len(council["action_plan"]) == 3
+    assert len(get_upcoming_festivals(sample_business)) >= 3
+
+    # Without GEMINI_API_KEY, react_bridge safely returns None
+    with patch("src.agents.react_bridge.has_gemini_key", return_value=""):
+        res = await run_react_specialist("social_create", "Cafe", "Write a post")
+    assert res is None

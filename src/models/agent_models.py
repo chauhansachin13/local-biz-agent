@@ -204,6 +204,52 @@ class WhatsAppMessage(Base):
     )
 
 
+class CustomerProfile(Base):
+    """Unified local business CRM & loyalty profile built from bookings, orders & chats."""
+
+    __tablename__ = "customers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True)
+    business_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    phone: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    visit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    total_spent: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    loyalty_points: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    segment: Mapped[str] = mapped_column(String(30), nullable=False, default="New")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_visit_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now
+    )
+
+
+class CompetitorBenchmark(Base):
+    """Local competitor tracked for competitive SWOT & counter-campaign strategy."""
+
+    __tablename__ = "competitors"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True)
+    business_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    category: Mapped[str] = mapped_column(String(120), nullable=False)
+    rating: Mapped[float] = mapped_column(Float, nullable=False, default=4.2)
+    review_count: Mapped[int] = mapped_column(Integer, nullable=False, default=50)
+    price_tier: Mapped[str] = mapped_column(String(20), nullable=False, default="$$")
+    strengths: Mapped[str | None] = mapped_column(Text, nullable=True)
+    weaknesses: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now
+    )
+
+
 # ---------------------------------------------------------------------------
 # Pydantic Schemas
 # ---------------------------------------------------------------------------
@@ -363,4 +409,62 @@ class WhatsAppMessageResponse(BaseModel):
     direction: str
     message_text: str
     agent_used: str | None = None
+    created_at: datetime
+
+
+class CustomerProfileResponse(BaseModel):
+    """CRM Customer profile response schema."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    business_id: int
+    name: str
+    phone: str | None = None
+    email: str | None = None
+    visit_count: int
+    total_spent: float
+    loyalty_points: int
+    segment: str
+    notes: str | None = None
+    last_visit_at: datetime
+    created_at: datetime
+
+
+class CustomerCreateRequest(BaseModel):
+    """Manual CRM customer creation payload."""
+
+    name: str = Field(..., min_length=1, max_length=255)
+    phone: str | None = Field(default=None, max_length=30)
+    email: str | None = Field(default=None, max_length=255)
+    segment: str = Field(default="New", max_length=30)
+    notes: str | None = None
+
+
+class CompetitorCreateRequest(BaseModel):
+    """Payload to track a local competitor."""
+
+    name: str = Field(..., min_length=1, max_length=255)
+    category: str = Field(default="local", max_length=120)
+    rating: float = Field(default=4.2, ge=1.0, le=5.0)
+    review_count: int = Field(default=50, ge=0)
+    price_tier: str = Field(default="$$", max_length=20)
+    strengths: str | None = None
+    weaknesses: str | None = None
+
+
+class CompetitorResponse(BaseModel):
+    """Tracked competitor response schema."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    business_id: int
+    name: str
+    category: str
+    rating: float
+    review_count: int
+    price_tier: str
+    strengths: str | None = None
+    weaknesses: str | None = None
     created_at: datetime

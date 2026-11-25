@@ -278,6 +278,7 @@ with st.sidebar:
         "📣 Social & Campaigns",
         "⭐ Reviews",
         "📅 Bookings & Orders",
+        "👥 CRM & Competitors",
         "🌐 Customer Storefront",
         "⚙️ Settings",
     ]
@@ -524,8 +525,13 @@ elif page.startswith("🤖 AI Autopilot & Approvals") and selected_business:
     biz_id = selected_business["id"]
     render_header(selected_business, "Human-in-the-Loop Approval Inbox & Autonomous Autopilot")
 
-    tab_inbox, tab_rules, tab_logs = st.tabs(
-        ["📥 Approval Inbox", "⚙️ Autopilot Rules", "🛰️ Agent Reasoning Logs"]
+    tab_inbox, tab_council, tab_rules, tab_logs = st.tabs(
+        [
+            "📥 Approval Inbox",
+            "🧠 Strategy Council & Festivals",
+            "⚙️ Autopilot Rules",
+            "🛰️ Agent Reasoning Logs",
+        ]
     )
 
     with tab_inbox:
@@ -606,6 +612,70 @@ elif page.startswith("🤖 AI Autopilot & Approvals") and selected_business:
                     if draft_text:
                         st.caption(f"Content: {draft_text}")
                 st.divider()
+
+    with tab_council:
+        st.subheader("🧠 Multi-Agent Strategy Council (Debate & Synthesis)")
+        st.caption(
+            "Convene 3 specialist AI agents (Growth Marketer, Reputation Guardian, Operations Optimizer) "
+            "to debate your business metrics and synthesize a prioritized weekly plan."
+        )
+        if st.button("🤝 Convene Weekly Strategy Council", type="primary"):
+            ok_sc, sc = api_request("POST", f"/api/agent/{biz_id}/strategy-council")
+            if ok_sc:
+                st.session_state[f"council_{biz_id}"] = sc
+            else:
+                st.error(sc)
+
+        sc_data = st.session_state.get(f"council_{biz_id}")
+        if sc_data:
+            st.success(sc_data["consensus_summary"])
+            m_cols = st.columns(len(sc_data["council_members"]))
+            for col, mem in zip(m_cols, sc_data["council_members"], strict=True):
+                with col:
+                    st.markdown(f"**`{mem['agent']}`**")
+                    st.caption(mem["stance"])
+                    st.info(mem["proposal"])
+            st.markdown("**📋 Prioritized Weekly Action Plan:**")
+            for step_item in sc_data["action_plan"]:
+                sc_c1, sc_c2 = st.columns([3, 1])
+                sc_c1.markdown(
+                    f"**Step {step_item['step']}: {step_item['title']}** — {step_item['why']}"
+                )
+                if sc_c2.button("⚡ Run Step", key=f"council_step_{biz_id}_{step_item['step']}"):
+                    ok_run, res_run = api_request(
+                        "POST",
+                        f"/api/agent/{biz_id}/chat",
+                        json_body={"message": step_item["prompt"], "auto_execute": True},
+                    )
+                    if ok_run:
+                        st.success(res_run["reply"])
+                    else:
+                        st.error(res_run)
+
+        st.divider()
+        st.subheader("🎉 Upcoming Festival & Local Event Campaigns")
+        ok_f, fests = api_request("GET", f"/api/agent/{biz_id}/festivals")
+        if ok_f and isinstance(fests, list):
+            for idx_f, fest in enumerate(fests):
+                fc1, fc2 = st.columns([3, 1])
+                fc1.markdown(
+                    f"**{fest['occasion']}** (`{fest['window']}`) — *{fest['offer_idea']}*"
+                )
+                if fc2.button("Queue Promo", key=f"fest_btn_{biz_id}_{idx_f}"):
+                    ok_fc, res_fc = api_request(
+                        "POST",
+                        f"/api/agent/{biz_id}/campaign",
+                        json_body={
+                            "occasion": fest["occasion"],
+                            "offer_details": fest["offer_idea"],
+                            "platforms": ["instagram", "google"],
+                            "auto_execute": False,
+                        },
+                    )
+                    if ok_fc:
+                        st.success(f"Queued {res_fc['approvals_queued']} drafts in Approval Inbox!")
+                    else:
+                        st.error(res_fc)
 
     with tab_rules:
         ok_cfg, cfg = api_request("GET", f"/api/agent/{biz_id}/autopilot")
@@ -880,7 +950,8 @@ elif page == "📣 Social & Campaigns" and selected_business:
                 key="social_cta",
             )
 
-            if st.button("✨ AI Assist — Generate Copy & Hashtags", use_container_width=True):
+            ab1, ab2 = st.columns(2)
+            if ab1.button("✨ AI Assist — Generate Copy & Hashtags", use_container_width=True):
                 ok_gen, gen_data = api_request(
                     "POST",
                     f"/api/social/{biz_id}/generate-content",
@@ -905,6 +976,40 @@ elif page == "📣 Social & Campaigns" and selected_business:
                     st.success("Generated AI post copy!")
                 else:
                     st.error(gen_data)
+
+            if ab2.button("⚡ Generate A/B Variants", use_container_width=True):
+                ok_ab, ab_data = api_request(
+                    "POST",
+                    f"/api/social/{biz_id}/ab-variants",
+                    json_body={
+                        "platform": platform,
+                        "topic": topic,
+                        "tone": tone,
+                        "include_hashtags": True,
+                        "call_to_action": cta,
+                    },
+                )
+                if ok_ab:
+                    st.session_state["ab_variants"] = ab_data
+                else:
+                    st.error(ab_data)
+
+            if st.session_state.get("ab_variants"):
+                ab_d = st.session_state["ab_variants"]
+                va, vb = st.columns(2)
+                for col_v, key_v in [(va, "variant_a"), (vb, "variant_b")]:
+                    var = ab_d[key_v]
+                    with col_v:
+                        st.markdown(
+                            f"**{var['label']}** (Predicted Score: `{var['predicted_engagement_score']}/100`)"
+                        )
+                        st.caption(var["content"])
+                        if st.button("Use This Variant", key=f"pick_{key_v}"):
+                            tags = " ".join(var.get("hashtags") or [])
+                            st.session_state["draft_content"] = (
+                                f"{var['content']}\n\n{tags}".strip()
+                            )
+                            st.rerun()
 
             content_text = st.text_area(
                 "Post Content",
@@ -1350,8 +1455,13 @@ elif page == "📅 Bookings & Orders" and selected_business:
     b3.metric("Active Online Orders", active_orders)
     with b4:
         st.link_button(
-            "📥 Export Calendar (.ics)",
+            "📥 Calendar (.ics)",
             f"{API_BASE_URL}/api/bookings/{biz_id}/calendar.ics",
+            use_container_width=True,
+        )
+        st.link_button(
+            "📄 Bookings CSV",
+            f"{API_BASE_URL}/api/businesses/{biz_id}/export?dataset=bookings",
             use_container_width=True,
         )
 
@@ -1514,7 +1624,114 @@ elif page == "📅 Bookings & Orders" and selected_business:
 
 
 # ---------------------------------------------------------------------------
-# PAGE 7: Customer Storefront & Catalog
+# PAGE 7: CRM, Loyalty & Competitor Intelligence
+# ---------------------------------------------------------------------------
+
+elif page == "👥 CRM & Competitors" and selected_business:
+    biz_id = selected_business["id"]
+    render_header(selected_business, "Customer CRM, Loyalty Retention & Competitor Watch")
+
+    tab_crm, tab_comp = st.tabs(["👥 Customer CRM & Loyalty", "🎯 Competitor Watch"])
+
+    with tab_crm:
+        top1, top2, top3 = st.columns([1.4, 1.2, 1.0])
+        with top1:
+            if st.button(
+                "🎁 Draft Loyalty & Retention Offers (HITL)",
+                type="primary",
+                use_container_width=True,
+            ):
+                ok_ret, res_ret = api_request("POST", f"/api/crm/{biz_id}/retention-offers")
+                if ok_ret:
+                    st.success(
+                        f"Queued {res_ret['queued_count']} personalized offer(s) in Approval Inbox!"
+                    )
+                else:
+                    st.error(res_ret)
+        with top3:
+            st.link_button(
+                "📄 Export CRM CSV",
+                f"{API_BASE_URL}/api/businesses/{biz_id}/export?dataset=customers",
+                use_container_width=True,
+            )
+
+        ok_cust, customers = api_request("GET", f"/api/crm/{biz_id}/customers")
+        if not ok_cust:
+            st.error(customers)
+        elif not customers:
+            st.info("No customers synced yet.")
+        else:
+            df_cust = pd.DataFrame(
+                [
+                    {
+                        "Name": c["name"],
+                        "Segment": c["segment"],
+                        "Visits": c["visit_count"],
+                        "Total Spent ($)": c["total_spent"],
+                        "Loyalty Pts": c["loyalty_points"],
+                        "Phone": c.get("phone") or "",
+                        "Email": c.get("email") or "",
+                    }
+                    for c in customers
+                ]
+            )
+            st.dataframe(df_cust, use_container_width=True, hide_index=True)
+
+    with tab_comp:
+        ok_cmp, cmp_data = api_request("GET", f"/api/crm/{biz_id}/competitors")
+        if ok_cmp:
+            st.metric(
+                "Your Rating vs Market",
+                f"{cmp_data['own_rating']} ★ ({cmp_data['own_review_count']} reviews)",
+            )
+            for strat in cmp_data.get("recommended_counter_strategies", []):
+                st.info(f"💡 **AI Counter-Strategy:** {strat}")
+            for comp in cmp_data.get("competitors", []):
+                cc1, cc2 = st.columns([3, 1])
+                cc1.markdown(
+                    f"**{comp['name']}** ({comp['price_tier']}) — ★ {comp['rating']} ({comp['review_count']} reviews) "
+                    f"| Advantage: `{comp['rating_advantage']:+.2f}★`"
+                )
+                cc1.caption(
+                    f"Strengths: {comp.get('strengths') or '—'} | Weaknesses: {comp.get('weaknesses') or '—'}"
+                )
+                if cc2.button("Remove", key=f"del_comp_{comp['id']}"):
+                    api_request("DELETE", f"/api/crm/{biz_id}/competitors/{comp['id']}")
+                    st.rerun()
+
+        with st.form("add_competitor_form"):
+            st.markdown("**➕ Track a Nearby Competitor**")
+            cf1, cf2, cf3 = st.columns(3)
+            c_name = cf1.text_input("Competitor Name*")
+            c_rat = cf2.number_input("Rating", min_value=1.0, max_value=5.0, value=4.1, step=0.1)
+            c_rev = cf3.number_input("Reviews Count", min_value=0, value=80, step=10)
+            c_str = cf1.text_input("Their Strength", placeholder="Prime corner location")
+            c_weak = cf2.text_input("Their Weakness", placeholder="Slow weekend wait times")
+            c_tier = cf3.selectbox("Price Tier", ["$", "$$", "$$$"], index=1)
+            if st.form_submit_button("Add Competitor"):
+                if c_name.strip():
+                    ok_add, res_add = api_request(
+                        "POST",
+                        f"/api/crm/{biz_id}/competitors",
+                        json_body={
+                            "name": c_name.strip(),
+                            "category": selected_business["category"],
+                            "rating": float(c_rat),
+                            "review_count": int(c_rev),
+                            "price_tier": c_tier,
+                            "strengths": c_str.strip() or None,
+                            "weaknesses": c_weak.strip() or None,
+                        },
+                    )
+                    if ok_add:
+                        st.success("Competitor added!")
+                        st.rerun()
+                    else:
+                        st.error(res_add)
+
+
+# ---------------------------------------------------------------------------
+# PAGE 8: Customer Storefront & Catalog
 # ---------------------------------------------------------------------------
 
 elif page == "🌐 Customer Storefront" and selected_business:

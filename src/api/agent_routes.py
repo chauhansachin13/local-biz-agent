@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +18,7 @@ from src.agents.health_and_growth import (
 from src.agents.orchestrator import BizPresenceOrchestrator
 from src.agents.scheduler import run_autopilot_cycle_for_business
 from src.agents.seo_audit import generate_daily_brief, run_seo_and_sentiment_audit
+from src.agents.strategy_council import get_upcoming_festivals, run_strategy_council
 from src.agents.supervisor import decide_approval_action
 from src.api.deps import get_business_or_404
 from src.database import get_db
@@ -306,3 +308,53 @@ async def get_morning_daily_brief(
     brief = await generate_daily_brief(db, business)
     await db.commit()
     return brief
+
+
+@router.post("/{business_id}/strategy-council")
+async def run_weekly_strategy_council(
+    business_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Run the 3-agent collaborative Strategy Council debate & weekly action plan."""
+    business = await get_business_or_404(db, business_id)
+    result = await run_strategy_council(db, business)
+    await db.commit()
+    return result
+
+
+@router.get("/{business_id}/festivals")
+async def list_upcoming_festivals(
+    business_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Return upcoming seasonal & local marketing campaign windows."""
+    business = await get_business_or_404(db, business_id)
+    return get_upcoming_festivals(business)
+
+
+class VoiceCommandRequest(BaseModel):
+    """Voice-to-text command payload from browser microphone or audio transcript."""
+
+    transcript: str = Field(..., min_length=1)
+    auto_execute: bool = True
+    language: str | None = None
+
+
+@router.post("/{business_id}/voice-command", response_model=AgentChatResponse)
+async def handle_voice_command(
+    business_id: int,
+    payload: VoiceCommandRequest,
+    db: AsyncSession = Depends(get_db),
+) -> AgentChatResponse:
+    """Route a spoken voice command transcript through the LangGraph Supervisor."""
+    business = await get_business_or_404(db, business_id)
+    result = await orchestrator.handle_chat(
+        db=db,
+        business=business,
+        message=payload.transcript,
+        auto_execute=payload.auto_execute,
+        session_id=f"voice_{business_id}",
+        language=payload.language,
+    )
+    await db.commit()
+    return AgentChatResponse(**result)

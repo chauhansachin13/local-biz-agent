@@ -5,12 +5,13 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from config.settings import settings
 from src.agents.scheduler import start_autopilot_scheduler, stop_autopilot_scheduler
@@ -118,10 +119,22 @@ async def root() -> dict:
             "reviews": "/api/reviews",
             "bookings": "/api/bookings",
             "orders": "/api/orders",
+            "crm": "/api/crm",
+            "whatsapp": "/api/whatsapp",
             "agent": "/api/agent",
             "storefront": "/site/{business_id}",
+            "web_app": "/app",
         },
     }
+
+
+WEB_INDEX = Path(__file__).resolve().parent.parent / "web" / "index.html"
+
+
+@app.get("/app", tags=["Web UI"], include_in_schema=False)
+async def serve_web_app() -> FileResponse:
+    """Serve the standalone interactive BizPresence AI web app."""
+    return FileResponse(WEB_INDEX)
 
 
 app.include_router(api_router)

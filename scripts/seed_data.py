@@ -22,10 +22,13 @@ from src.models.agent_models import (  # noqa: E402
     AgentThreadMessage,
     ApprovalStatus,
     BusinessAgentConfig,
+    CompetitorBenchmark,
+    CustomerProfile,
     FulfillmentType,
     OrderRequest,
     OrderStatus,
     RiskLevel,
+    WhatsAppMessage,
 )
 from src.models.booking import Booking, BookingStatus  # noqa: E402
 from src.models.business import Business  # noqa: E402
@@ -42,6 +45,9 @@ def seed_database(reset: bool = True) -> None:
 
     with Session(engine) as db:
         if reset:
+            db.query(WhatsAppMessage).delete()
+            db.query(CompetitorBenchmark).delete()
+            db.query(CustomerProfile).delete()
             db.query(AgentRunLog).delete()
             db.query(AgentThreadMessage).delete()
             db.query(AgentApprovalAction).delete()
@@ -516,10 +522,54 @@ def seed_database(reset: bool = True) -> None:
                 status=ApprovalStatus.PENDING,
             )
         )
+        db.add_all(
+            [
+                CompetitorBenchmark(
+                    business_id=restaurant.id,
+                    name="Downtown Pasta House",
+                    category="restaurant",
+                    rating=4.1,
+                    review_count=112,
+                    price_tier="$$",
+                    strengths="Large patio seating",
+                    weaknesses="Long Friday night wait times and slow takeaway pickup",
+                ),
+                CompetitorBenchmark(
+                    business_id=salon.id,
+                    name="Vogue Cuts Studio",
+                    category="salon",
+                    rating=4.2,
+                    review_count=84,
+                    price_tier="$$$",
+                    strengths="Central downtown location",
+                    weaknesses="Limited Sunday hours and higher balayage pricing",
+                ),
+                CustomerProfile(
+                    business_id=restaurant.id,
+                    name="Liam O'Connor",
+                    phone="(512) 555-1001",
+                    email="liam.oconnor@example.com",
+                    visit_count=4,
+                    total_spent=165.0,
+                    loyalty_points=225,
+                    segment="VIP",
+                ),
+                CustomerProfile(
+                    business_id=restaurant.id,
+                    name="Ava Chen",
+                    phone="(512) 555-1002",
+                    email="ava.chen@example.com",
+                    visit_count=2,
+                    total_spent=88.0,
+                    loyalty_points=118,
+                    segment="Regular",
+                ),
+            ]
+        )
         db.commit()
         print(
             "Seed complete: inserted 2 businesses, 10 reviews, 5 social posts, 8 bookings, "
-            "2 orders, and 1 HITL approval draft."
+            "2 orders, 2 competitors, 2 CRM VIP/Regular customers, and 1 HITL approval draft."
         )
 
 

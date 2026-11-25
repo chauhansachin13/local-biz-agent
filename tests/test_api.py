@@ -451,3 +451,76 @@ async def test_whatsapp_concierge_promo_png_qr_ics_review_submit_and_brief(
     agents_used = [t["agent"] for t in chat_resp.json()["agent_trace"]]
     assert "QualityCriticAgent" in agents_used
     assert chat_resp.json()["data"]["quality_score"] >= 70
+
+
+async def test_strategy_council_festivals_ab_crm_competitors_voice_export_and_webapp(
+    test_client: AsyncClient,
+    sample_business: Business,
+    sample_booking: Booking,
+) -> None:
+    """Verify Strategy Council, Festivals, A/B variants, CRM, Competitors, Voice, CSV export & /app."""
+    # Strategy Council & Festivals
+    sc = await test_client.post(f"/api/agent/{sample_business.id}/strategy-council")
+    assert sc.status_code == 200
+    assert len(sc.json()["council_members"]) == 3
+    assert len(sc.json()["action_plan"]) == 3
+
+    fest = await test_client.get(f"/api/agent/{sample_business.id}/festivals")
+    assert fest.status_code == 200 and len(fest.json()) >= 3
+
+    # Voice Command
+    vc = await test_client.post(
+        f"/api/agent/{sample_business.id}/voice-command",
+        json={"transcript": "Show today's bookings and open slots"},
+    )
+    assert vc.status_code == 200 and vc.json()["intent"] == "booking_manage"
+
+    # A/B Social Variants
+    ab = await test_client.post(
+        f"/api/social/{sample_business.id}/ab-variants",
+        json={"platform": "instagram", "topic": "Sourdough Weekend"},
+    )
+    assert ab.status_code == 200
+    assert "variant_a" in ab.json() and "variant_b" in ab.json()
+
+    # CRM Sync, Manual Add & Retention Offers
+    crm_list = await test_client.get(f"/api/crm/{sample_business.id}/customers")
+    assert crm_list.status_code == 200 and len(crm_list.json()) >= 1
+
+    crm_add = await test_client.post(
+        f"/api/crm/{sample_business.id}/customers",
+        json={"name": "VIP Guest", "phone": "+1 512 555 0909", "segment": "VIP"},
+    )
+    assert crm_add.status_code == 201
+
+    ret = await test_client.post(f"/api/crm/{sample_business.id}/retention-offers")
+    assert ret.status_code == 200 and ret.json()["queued_count"] >= 1
+
+    # Competitors Add, Analyze & Delete
+    comp_add = await test_client.post(
+        f"/api/crm/{sample_business.id}/competitors",
+        json={
+            "name": "Rival Bakery",
+            "rating": 4.0,
+            "review_count": 70,
+            "weaknesses": "No online booking",
+        },
+    )
+    assert comp_add.status_code == 201
+    comp_id = comp_add.json()["id"]
+
+    comp_an = await test_client.get(f"/api/crm/{sample_business.id}/competitors")
+    assert comp_an.status_code == 200 and len(comp_an.json()["competitors"]) == 1
+
+    comp_del = await test_client.delete(f"/api/crm/{sample_business.id}/competitors/{comp_id}")
+    assert comp_del.status_code == 200
+
+    # CSV Exports & Standalone Web App (/app)
+    for ds in ("bookings", "orders", "reviews", "customers"):
+        exp = await test_client.get(
+            f"/api/businesses/{sample_business.id}/export", params={"dataset": ds}
+        )
+        assert exp.status_code == 200 and "text/csv" in exp.headers["content-type"]
+
+    webapp = await test_client.get("/app")
+    assert webapp.status_code == 200 and "BizPresence AI" in webapp.text
