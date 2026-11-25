@@ -388,6 +388,25 @@ async def run_supervisor_turn(
                         }
                     )
                 else:
+                    existing_ap_rows = list(
+                        (
+                            await db.execute(
+                                select(AgentApprovalAction).where(
+                                    AgentApprovalAction.business_id == business.id,
+                                    AgentApprovalAction.action_type == "reply_review",
+                                    AgentApprovalAction.status == ApprovalStatus.PENDING,
+                                )
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                    already_queued_reviews: dict[int, AgentApprovalAction] = {
+                        int(a.payload["review_id"]): a
+                        for a in existing_ap_rows
+                        if isinstance(a.payload, dict) and a.payload.get("review_id") is not None
+                    }
+
                     do_auto = can_execute and any(
                         k in low for k in ("auto", "all", "respond to", "reply to", "send")
                     )
@@ -423,32 +442,38 @@ async def run_supervisor_turn(
                             rev.response_status = ResponseStatus.RESPONDED
                             rev.responded_at = now
                             auto_sent_count += 1
+                            auto_ids = data.setdefault("auto_replied_review_ids", [])
+                            auto_ids.append(rev.id)
                         elif not can_execute or (do_auto and needs_hitl):
-                            action = AgentApprovalAction(
-                                business_id=business.id,
-                                action_type="reply_review",
-                                title=f"Reply to {rev.reviewer_name} ({rev.rating}★ on {rev.platform.title()})",
-                                description=rev.review_text or "(Rating only)",
-                                agent_name="ReviewManagerAgent",
-                                reasoning=(
-                                    "Low-rating review held by safety guardrail for owner approval."
-                                    if rev.rating <= 2
-                                    else "Copilot mode draft awaiting owner confirmation."
-                                ),
-                                risk_level=RiskLevel.HIGH if rev.rating <= 2 else RiskLevel.LOW,
-                                payload={"review_id": rev.id, "response_text": draft},
-                                status=ApprovalStatus.PENDING,
-                            )
-                            db.add(action)
-                            await db.flush()
-                            queued_approvals.append(
-                                {
-                                    "id": action.id,
-                                    "action_type": action.action_type,
-                                    "title": action.title,
-                                    "risk_level": action.risk_level.value,
-                                }
-                            )
+                            if rev.id in already_queued_reviews:
+                                action = already_queued_reviews[rev.id]
+                            else:
+                                action = AgentApprovalAction(
+                                    business_id=business.id,
+                                    action_type="reply_review",
+                                    title=f"Reply to {rev.reviewer_name} ({rev.rating}★ on {rev.platform.title()})",
+                                    description=rev.review_text or "(Rating only)",
+                                    agent_name="ReviewManagerAgent",
+                                    reasoning=(
+                                        "Low-rating review held by safety guardrail for owner approval."
+                                        if rev.rating <= 2
+                                        else "Copilot mode draft awaiting owner confirmation."
+                                    ),
+                                    risk_level=RiskLevel.HIGH if rev.rating <= 2 else RiskLevel.LOW,
+                                    payload={"review_id": rev.id, "response_text": draft},
+                                    status=ApprovalStatus.PENDING,
+                                )
+                                db.add(action)
+                                await db.flush()
+                                already_queued_reviews[rev.id] = action
+                                queued_approvals.append(
+                                    {
+                                        "id": action.id,
+                                        "action_type": action.action_type,
+                                        "title": action.title,
+                                        "risk_level": action.risk_level.value,
+                                    }
+                                )
 
                         drafts.append(
                             {
@@ -494,6 +519,7 @@ async def run_supervisor_turn(
 
             elif step == "booking_manage":
                 today = date.today()
+                target_day = today + timedelta(days=1) if "tomorrow" in low else today
                 stmt = (
                     select(Booking)
                     .where(
@@ -504,8 +530,9 @@ async def run_supervisor_turn(
                     .order_by(Booking.booking_date.asc(), Booking.booking_time.asc())
                 )
                 upcoming = list((await db.execute(stmt)).scalars().all())
-                avail = await booking_agent.get_availability(db, business, today)
+                avail = await booking_agent.get_availability(db, business, target_day)
                 open_slots = [s["start_time"] for s in avail["slots"] if s["available"]]
+                day_label = "tomorrow" if target_day != today else "today"
                 data["upcoming_count"] = len(upcoming)
                 data["today_open_slots"] = open_slots[:8]
 
@@ -514,7 +541,7 @@ async def run_supervisor_turn(
                         "agent": "BookingAgent",
                         "tool": "get_availability",
                         "status": "completed",
-                        "detail": f"Found {len(upcoming)} upcoming booking(s) and {len(open_slots)} open slot(s) today.",
+                        "detail": f"Found {len(upcoming)} upcoming booking(s) and {len(open_slots)} open slot(s) {day_label}.",
                     }
                 )
                 if upcoming:
@@ -525,12 +552,14 @@ async def run_supervisor_turn(
                     )
                     sections.append(
                         f"**{business.name}** has **{len(upcoming)} upcoming booking(s)**:\n\n{lines}\n\n"
-                        f"**Open slots today:** {', '.join(open_slots[:6]) if open_slots else 'Fully booked / Closed'}"
+                        f"**Open slots {day_label} ({target_day.isoformat()}):** "
+                        f"{', '.join(open_slots[:6]) if open_slots else 'Fully booked / Closed'}"
                     )
                 else:
                     sections.append(
                         f"No upcoming bookings found for **{business.name}**. "
-                        f"Open slots today: {', '.join(open_slots[:6]) if open_slots else 'Closed today'}."
+                        f"Open slots {day_label} ({target_day.isoformat()}): "
+                        f"{', '.join(open_slots[:6]) if open_slots else f'Closed {day_label}'}."
                     )
                 followups.append("Promote today's open slots on Instagram")
 
@@ -734,37 +763,97 @@ async def run_supervisor_turn(
         """Self-reflection quality critic verifying brand voice, length limits, and empathy."""
         trace = list(state.get("agent_trace") or [])
         data = dict(state.get("data") or {})
+        section_replies = list(state.get("section_replies") or [])
         issues_fixed: list[str] = []
         score = 96
 
-        # 1. Inspect generated social post for platform character limits & CTA
+        # 1. Inspect generated social post for platform character limits & brand mention
         gen = data.get("generated_post")
         if isinstance(gen, dict):
             plat = str(gen.get("platform", "")).lower()
-            content = str(gen.get("content", ""))
+            orig_content = str(gen.get("content", ""))
+            content = orig_content
             if plat == "twitter" and len(content) > 280:
-                gen["content"] = content[:276].rstrip() + "..."
+                content = content[:276].rstrip() + "..."
                 issues_fixed.append("Trimmed Twitter/X post to <=280 characters")
                 score -= 4
             if business.name.lower() not in content.lower():
-                gen["content"] = f"{content.rstrip()} — {business.name}"
+                suffix = f" — {business.name}"
+                if plat == "twitter" and len(content) + len(suffix) > 280:
+                    content = content[: 280 - len(suffix) - 3].rstrip() + "..." + suffix
+                else:
+                    content = f"{content.rstrip()}{suffix}"
                 issues_fixed.append("Added business brand mention to social copy")
                 score -= 2
+            gen["content"] = content
             data["generated_post"] = gen
+
+            # Keep persisted SocialPost / HITL approval consistent with critic revision
+            if content != orig_content:
+                section_replies = [s.replace(orig_content, content) for s in section_replies]
+                tags_line = " ".join(gen.get("hashtags") or [])
+                revised_full = f"{content}\n\n{tags_line}".strip() if tags_line else content
+                if data.get("post_id") is not None:
+                    post_obj = (
+                        await db.execute(
+                            select(SocialPost).where(SocialPost.id == int(data["post_id"]))
+                        )
+                    ).scalar_one_or_none()
+                    if post_obj:
+                        post_obj.content = revised_full
+                for q in state.get("queued_approvals") or []:
+                    if q.get("action_type") == "publish_post":
+                        ap = (
+                            await db.execute(
+                                select(AgentApprovalAction).where(
+                                    AgentApprovalAction.id == int(q["id"])
+                                )
+                            )
+                        ).scalar_one_or_none()
+                        if ap:
+                            ap_payload = dict(ap.payload or {})
+                            ap_payload["content"] = revised_full
+                            ap.payload = ap_payload
 
         # 2. Inspect review reply drafts for empathy & non-defensive phrasing
         drafts = data.get("drafts")
         if isinstance(drafts, list):
             defensive_terms = ("your fault", "you are wrong", "not our problem")
+            auto_ids = set(data.get("auto_replied_review_ids") or [])
             for d in drafts:
                 txt = str(d.get("draft", ""))
                 if any(term in txt.lower() for term in defensive_terms):
-                    d["draft"] = (
+                    revised_reply = (
                         f"Thank you for your feedback. At {business.name}, we take every guest's "
                         "experience seriously and would love to discuss this directly with you."
                     )
+                    d["draft"] = revised_reply
+                    section_replies = [s.replace(txt, revised_reply) for s in section_replies]
                     issues_fixed.append("Rewrote defensive phrasing into empathetic reply")
                     score -= 6
+                    rev_id = d.get("review_id")
+                    if rev_id in auto_ids:
+                        rev_obj = (
+                            await db.execute(select(Review).where(Review.id == int(rev_id)))
+                        ).scalar_one_or_none()
+                        if rev_obj:
+                            rev_obj.response_text = revised_reply
+                    for q in state.get("queued_approvals") or []:
+                        if q.get("action_type") == "reply_review":
+                            ap = (
+                                await db.execute(
+                                    select(AgentApprovalAction).where(
+                                        AgentApprovalAction.id == int(q["id"])
+                                    )
+                                )
+                            ).scalar_one_or_none()
+                            if ap and (ap.payload or {}).get("review_id") == rev_id:
+                                ap_payload = dict(ap.payload or {})
+                                ap_payload["response_text"] = revised_reply
+                                ap.payload = ap_payload
+
+        if issues_fixed:
+            await db.flush()
 
         data["quality_score"] = max(70, score)
         trace.append(
@@ -782,7 +871,7 @@ async def run_supervisor_turn(
                 ),
             }
         )
-        return {"agent_trace": trace, "data": data}
+        return {"agent_trace": trace, "data": data, "section_replies": section_replies}
 
     async def synthesize_node(state: SupervisorState) -> SupervisorState:
         combined_reply = "\n\n---\n\n".join(state.get("section_replies") or [])

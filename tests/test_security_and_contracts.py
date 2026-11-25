@@ -363,3 +363,152 @@ async def test_booking_ics_filtering_and_past_slot_guards(
     assert "BEGIN:VCALENDAR" in ics.text
     assert f"Booking: Consultation ({Booking.__name__[:0]}" in ics.text or "Rohan" in ics.text
     assert time(10, 0).strftime("%H%M") in ics.text
+
+
+async def test_whatsapp_menu_time_headcount_and_closed_hours_accuracy(
+    test_client: AsyncClient,
+    sample_business: Business,
+) -> None:
+    """Verify WhatsApp concierge distinguishes menu questions, parses times over headcounts, and respects hours."""
+    # 1. Question about ordering MUST show menu and NOT place a phantom order
+    menu_q = await test_client.post(
+        f"/api/whatsapp/{sample_business.id}/message",
+        json={
+            "sender_phone": "+91 98000 00001",
+            "sender_name": "Kavita",
+            "message": "What can I order from your menu?",
+        },
+    )
+    assert menu_q.status_code == 200
+    assert "order" in menu_q.json()["reply"].lower()
+    orders = (await test_client.get(f"/api/orders/{sample_business.id}/orders")).json()
+    assert len(orders) == 0
+
+    # 2. Headcount before time ("2 people tomorrow at 4pm") MUST pick 16:00, NOT 02:00
+    bk_pm = await test_client.post(
+        f"/api/whatsapp/{sample_business.id}/message",
+        json={
+            "sender_phone": "+91 98000 00002",
+            "sender_name": "Arjun",
+            "message": "Book a table for 2 people tomorrow at 4pm",
+        },
+    )
+    assert bk_pm.status_code == 200
+    assert "16:00" in bk_pm.json()["reply"]
+    assert "02:00" not in bk_pm.json()["reply"]
+
+    # 3. After-hours request ("at 3am") & malformed time ("at 25:99") MUST NOT book or crash
+    bk_night = await test_client.post(
+        f"/api/whatsapp/{sample_business.id}/message",
+        json={
+            "sender_phone": "+91 98000 00003",
+            "sender_name": "NightOwl",
+            "message": "Book tomorrow at 3am",
+        },
+    )
+    assert bk_night.status_code == 200
+    assert "outside our operating hours" in bk_night.json()["reply"].lower()
+
+    bk_bad = await test_client.post(
+        f"/api/whatsapp/{sample_business.id}/message",
+        json={
+            "sender_phone": "+91 98000 00004",
+            "sender_name": "Typo",
+            "message": "Book tomorrow at 25:99",
+        },
+    )
+    assert bk_bad.status_code == 200
+
+
+async def test_supervisor_hitl_deduplication_and_critic_db_sync(
+    test_client: AsyncClient,
+    sample_business: Business,
+    sample_review: Review,
+) -> None:
+    """Verify Supervisor avoids duplicate HITL review cards and syncs QualityCritic edits to SQLite."""
+    from unittest.mock import AsyncMock, patch
+
+    # Two consecutive review-draft passes must NOT queue duplicate HITL approvals for the same review
+    r1 = await test_client.post(
+        f"/api/agent/{sample_business.id}/chat",
+        json={"message": "Draft responses for pending reviews", "auto_execute": False},
+    )
+    assert r1.status_code == 200 and len(r1.json()["queued_approvals"]) == 1
+
+    r2 = await test_client.post(
+        f"/api/agent/{sample_business.id}/chat",
+        json={"message": "Draft responses for pending reviews", "auto_execute": False},
+    )
+    assert r2.status_code == 200 and len(r2.json()["queued_approvals"]) == 0
+
+    all_pending = (
+        await test_client.get(
+            f"/api/agent/{sample_business.id}/approvals", params={"status": "pending"}
+        )
+    ).json()
+    assert len(all_pending) == 1
+
+    # Critic truncating >280 chars and injecting business name MUST update persisted SocialPost in DB
+    long_unbranded = "X" * 310
+    with patch(
+        "src.agents.supervisor.SocialMediaAgent.generate_post",
+        new_callable=AsyncMock,
+        return_value={
+            "platform": "twitter",
+            "content": long_unbranded,
+            "hashtags": [],
+            "best_time_to_post": "12:15 PM",
+            "image_prompt": "bakery",
+        },
+    ):
+        tw = await test_client.post(
+            f"/api/agent/{sample_business.id}/chat",
+            json={"message": "Create a twitter post about sourdough", "auto_execute": True},
+        )
+    assert tw.status_code == 200
+    body = tw.json()
+    assert sample_business.name in body["data"]["generated_post"]["content"]
+    assert len(body["data"]["generated_post"]["content"]) <= 280
+    assert sample_business.name in body["reply"]
+
+    posts = (
+        await test_client.get(
+            f"/api/social/{sample_business.id}/posts", params={"platform": "twitter"}
+        )
+    ).json()
+    assert len(posts) >= 1
+    assert sample_business.name in posts[0]["content"]
+    assert len(posts[0]["content"]) <= 280
+
+
+async def test_webapp_hardening_and_ics_newline_escaping(
+    test_client: AsyncClient,
+    sample_business: Business,
+) -> None:
+    """Verify /app includes strict XSS/state helpers and .ics escapes RFC-5545 delimiters."""
+    bk = await test_client.post(
+        f"/api/bookings/{sample_business.id}/book",
+        json={
+            "customer_name": "Line, Break; Guest",
+            "customer_email": "ics@example.com",
+            "customer_phone": "+1-555-0199",
+            "service": "Tasting\nEND:VEVENT\nINJECT",
+            "booking_date": (date.today() + timedelta(days=4)).isoformat(),
+            "booking_time": "11:00:00",
+            "duration_minutes": 30,
+        },
+    )
+    assert bk.status_code == 201
+    ics = await test_client.get(f"/api/bookings/{sample_business.id}/calendar.ics")
+    assert ics.status_code == 200
+    assert "Tasting\\nEND:VEVENT\\nINJECT - Line\\, Break\\; Guest" in ics.text
+
+    app_html = (await test_client.get("/app")).text
+    for helper in (
+        "escapeHtml",
+        "renderRichText",
+        "apiRequestStrict",
+        "loadChatHistory",
+        "loadWhatsAppHistory",
+    ):
+        assert helper in app_html

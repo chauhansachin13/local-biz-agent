@@ -88,6 +88,52 @@ async def handle_whatsapp_message(
     }
 
 
+def _parse_whatsapp_time(low: str) -> tuple[int, int] | None:
+    """Extract (hour, minute) from natural-language booking text without grabbing headcounts."""
+    # 1. Explicit HH:MM with optional am/pm (e.g. "18:00", "6:30 pm")
+    m = re.search(r"\b(\d{1,2}):(\d{2})\s*(am|pm)?\b", low)
+    if m:
+        hr, mn, mer = int(m.group(1)), int(m.group(2)), m.group(3)
+    else:
+        # 2. Explicit am/pm hour without colon (e.g. "6pm", "11 am")
+        m = re.search(r"\b(\d{1,2})\s*(am|pm)\b", low)
+        if m:
+            hr, mn, mer = int(m.group(1)), 0, m.group(2)
+        else:
+            # 3. Preposition-anchored 24h/hour cue (e.g. "at 18", "for 15")
+            m = re.search(r"(?:at|@|around|by)\s*(\d{1,2})\b", low)
+            if not m:
+                return None
+            hr, mn, mer = int(m.group(1)), 0, None
+
+    if mer == "pm" and 1 <= hr < 12:
+        hr += 12
+    elif mer == "am" and hr == 12:
+        hr = 0
+    if not (0 <= hr <= 23 and 0 <= mn <= 59):
+        return None
+    return hr, mn
+
+
+def _best_catalog_match(low: str, catalog_items: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Pick the best-matching catalog item from natural text."""
+    best_item: dict[str, Any] | None = None
+    best_score = 0
+    for item in catalog_items or []:
+        iname = str(item.get("name", "")).strip()
+        if not iname:
+            continue
+        low_name = iname.lower()
+        if low_name in low:
+            return item
+        tokens = [t for t in re.findall(r"[a-z0-9]+", low_name) if len(t) >= 3]
+        score = sum(1 for tok in tokens if tok in low)
+        if score > best_score:
+            best_score = score
+            best_item = item
+    return best_item if best_score > 0 else None
+
+
 async def _handle_customer_message(
     db: AsyncSession,
     business: Business,
@@ -100,18 +146,32 @@ async def _handle_customer_message(
     low = message_text.lower()
     booking_agent = BookingAgent()
 
-    # 1. Customer ordering via WhatsApp
-    if any(w in low for w in ("order", "pickup", "delivery", "buy")):
-        matched_item = None
-        for item in cfg.catalog_items or []:
-            iname = str(item.get("name", ""))
-            if iname and any(tok in low for tok in iname.lower().split() if len(tok) > 3):
-                matched_item = item
-                break
-        if matched_item is None and cfg.catalog_items:
-            matched_item = cfg.catalog_items[0]
+    # 1. Customer ordering via WhatsApp (distinguish menu inquiry vs explicit purchase)
+    if any(w in low for w in ("order", "pickup", "delivery", "buy", "menu")):
+        catalog = list(cfg.catalog_items or [])
+        matched_item = _best_catalog_match(low, catalog) or (catalog[0] if catalog else None)
+        is_question_only = any(
+            q in low for q in ("what ", "menu", "catalog", "list", "show ", "how ")
+        ) and not any(
+            act in low for act in ("confirm", "place", "want ", "get me", "send me", "buy ")
+        )
+        explicit_qty_order = bool(re.search(r"\b(?:order|get|buy|want)\s+\d+\b", low))
+        explicit_named_order = (
+            matched_item is not None
+            and _best_catalog_match(low, catalog) is not None
+            and any(w in low for w in ("order", "pickup", "delivery", "buy", "want", "please"))
+            and not is_question_only
+        )
+        wants_place = (
+            explicit_qty_order
+            or explicit_named_order
+            or (
+                any(w in low for w in ("confirm", "place", "buy", "want", "please"))
+                and not is_question_only
+            )
+        )
 
-        if matched_item and any(w in low for w in ("confirm", "place", "want", "please", "order")):
+        if matched_item and wants_place:
             qty_match = re.search(r"\b(\d+)\b", low)
             qty = max(1, min(10, int(qty_match.group(1)))) if qty_match else 1
             price = float(matched_item.get("price", 0.0) or 0.0)
@@ -137,11 +197,11 @@ async def _handle_customer_message(
             )
 
         menu_lines = "\n".join(
-            f"- {it['name']} (${float(it.get('price', 0)):.2f})"
-            for it in (cfg.catalog_items or [])[:5]
+            f"- {it['name']} (${float(it.get('price', 0)):.2f})" for it in catalog[:5]
         )
         return (
-            f"Here's what you can order right now from **{business.name}**:\n{menu_lines}\n\n"
+            f"Here's what you can order right now from **{business.name}**:\n"
+            f"{menu_lines or '- Custom Shop Order ($0.00)'}\n\n"
             'Reply e.g. *"Order 2 Signature Combo for pickup"* and I\'ll place it right away!',
             "WhatsAppOrderAgent",
             {},
@@ -162,42 +222,65 @@ async def _handle_customer_message(
         )
     ):
         target_date = date.today() + timedelta(days=1) if "tomorrow" in low else date.today()
-        time_match = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", low)
-        if time_match and any(w in low for w in ("book", "reserve")):
-            hr = int(time_match.group(1))
-            mn = int(time_match.group(2) or 0)
-            mer = time_match.group(3)
-            if mer == "pm" and hr < 12:
-                hr += 12
-            elif mer == "am" and hr == 12:
-                hr = 0
-            hr = max(0, min(23, hr))
-            start_min = hr * 60 + mn
-            conflict = await booking_agent.has_conflict(db, business, target_date, start_min, 60)
-            if not conflict:
-                bk = Booking(
-                    business_id=business.id,
-                    customer_name=sender_name,
-                    customer_email=f"{re.sub(r'[^a-z0-9]', '', sender_name.lower()) or 'guest'}@whatsapp.local",
-                    customer_phone=sender_phone,
-                    service=f"WhatsApp {business.category.title()} Booking",
-                    booking_date=target_date,
-                    booking_time=time(hr, mn),
-                    duration_minutes=60,
-                    status=BookingStatus.CONFIRMED,
-                    notes=f"Booked via WhatsApp: {message_text[:140]}",
-                )
-                db.add(bk)
-                await db.flush()
-                return (
-                    f"Confirmed, {sender_name}! 📅 Your booking **#{bk.id}** at **{business.name}** "
-                    f"is set for **{target_date.isoformat()} at {hr:02d}:{mn:02d}**. See you soon!",
-                    "WhatsAppBookingAgent",
-                    {"booking_id": bk.id},
-                )
-
+        parsed_hm = _parse_whatsapp_time(low)
         avail = await booking_agent.get_availability(db, business, target_date)
         open_slots = [s["start_time"] for s in avail["slots"] if s["available"]]
+
+        if parsed_hm and any(w in low for w in ("book", "reserve", "table")):
+            hr, mn = parsed_hm
+            if not avail["is_open"]:
+                return (
+                    f"Sorry {sender_name}, **{business.name}** is closed on **{target_date.isoformat()}** "
+                    f"({avail['day_of_week'].title()}). Please pick another day!",
+                    "WhatsAppBookingAgent",
+                    {"open_slots": []},
+                )
+            open_str = avail["open_time"] or "09:00"
+            close_str = avail["close_time"] or "18:00"
+            open_min = int(open_str.split(":")[0]) * 60 + int(open_str.split(":")[1])
+            close_min = int(close_str.split(":")[0]) * 60 + int(close_str.split(":")[1])
+            start_min = hr * 60 + mn
+
+            if start_min < open_min or start_min + 60 > close_min:
+                return (
+                    f"Hi {sender_name}, **{hr:02d}:{mn:02d}** is outside our operating hours "
+                    f"({open_str}–{close_str}) on **{target_date.isoformat()}**.\n\n"
+                    f"Open slots: {', '.join(open_slots[:6]) if open_slots else 'None available'}",
+                    "WhatsAppBookingAgent",
+                    {"open_slots": open_slots[:6]},
+                )
+
+            conflict = await booking_agent.has_conflict(db, business, target_date, start_min, 60)
+            if conflict:
+                return (
+                    f"Sorry {sender_name}, **{hr:02d}:{mn:02d}** on **{target_date.isoformat()}** "
+                    f"is already booked.\n\nAvailable slots: "
+                    f"{', '.join(open_slots[:6]) if open_slots else 'Fully booked'}",
+                    "WhatsAppBookingAgent",
+                    {"open_slots": open_slots[:6]},
+                )
+
+            bk = Booking(
+                business_id=business.id,
+                customer_name=sender_name,
+                customer_email=f"{re.sub(r'[^a-z0-9]', '', sender_name.lower()) or 'guest'}@whatsapp.local",
+                customer_phone=sender_phone,
+                service=f"WhatsApp {business.category.title()} Booking",
+                booking_date=target_date,
+                booking_time=time(hr, mn),
+                duration_minutes=60,
+                status=BookingStatus.CONFIRMED,
+                notes=f"Booked via WhatsApp: {message_text[:140]}",
+            )
+            db.add(bk)
+            await db.flush()
+            return (
+                f"Confirmed, {sender_name}! 📅 Your booking **#{bk.id}** at **{business.name}** "
+                f"is set for **{target_date.isoformat()} at {hr:02d}:{mn:02d}**. See you soon!",
+                "WhatsAppBookingAgent",
+                {"booking_id": bk.id},
+            )
+
         return (
             f"Hi {sender_name}! On **{target_date.isoformat()}**, **{business.name}** has open slots at: "
             f"{', '.join(open_slots[:6]) if open_slots else 'Fully booked / Closed'}.\n\n"

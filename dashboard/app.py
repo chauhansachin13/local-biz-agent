@@ -92,6 +92,7 @@ st.markdown(
     .badge-draft     { background: #f1f5f9; color: #475569; }
     .calendar-day {
         background: #ffffff;
+        color: #0f172a;
         border: 1px solid #e2e8f0;
         border-radius: 10px;
         padding: 0.7rem;
@@ -108,6 +109,7 @@ st.markdown(
     }
     .suggestion-card {
         background: #ffffff;
+        color: #0f172a;
         border: 1px solid #e2e8f0;
         border-radius: 12px;
         padding: 0.9rem 1rem;
@@ -198,8 +200,8 @@ def render_header(business: dict[str, Any], subtitle: str) -> None:
     st.markdown(
         f"""
         <div class="biz-header">
-            <h1>🏪 {business["name"]}</h1>
-            <p>{business.get("category", "").title()}{loc_part} — {subtitle}</p>
+            <h1>🏪 {html.escape(business["name"])}</h1>
+            <p>{html.escape(business.get("category", "").title() + loc_part)} — {html.escape(subtitle)}</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -253,6 +255,15 @@ with st.sidebar:
             key="selected_business_label",
         )
         selected_business = biz_labels[chosen_label]
+        if st.session_state.get("active_biz_id") != selected_business["id"]:
+            st.session_state["active_biz_id"] = selected_business["id"]
+            for stale_key in (
+                "draft_content",
+                "draft_best_time",
+                "draft_image_prompt",
+                "ab_variants",
+            ):
+                st.session_state.pop(stale_key, None)
         gbp_badge = (
             "Verified ✅" if selected_business.get("google_business_id") else "Not Configured"
         )
@@ -485,13 +496,13 @@ elif page == "🏠 Home & Health Score" and selected_business:
                     f"""
                     <div class="suggestion-card">
                         <span style="color:{prio_color}; font-weight:700; font-size:0.75rem; text-transform:uppercase;">
-                            ● {sug["priority"]} priority • {sug["category"]}
+                            ● {html.escape(sug["priority"])} priority • {html.escape(sug["category"])}
                         </span>
-                        <div style="font-weight:600; font-size:1rem; margin:0.25rem 0;">
-                            {sug["title"]}
+                        <div style="font-weight:600; font-size:1rem; margin:0.25rem 0; color:#0f172a;">
+                            {html.escape(sug["title"])}
                         </div>
                         <div style="color:#475569; font-size:0.86rem;">
-                            {sug["description"]}
+                            {html.escape(sug["description"])}
                         </div>
                     </div>
                     """,
@@ -553,18 +564,18 @@ elif page.startswith("🤖 AI Autopilot & Approvals") and selected_business:
                     f"""
                     <div class="metric-card" style="margin-bottom:0.5rem;">
                         <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <strong>{item["title"]}</strong>
+                            <strong>{html.escape(item["title"])}</strong>
                             <div>
                                 {status_badge(item["risk_level"])}
                                 {status_badge(item["status"])}
                             </div>
                         </div>
                         <div style="color:#475569; font-size:0.86rem; margin:0.35rem 0;">
-                            <strong>Agent:</strong> <code>{item["agent_name"]}</code> •
-                            <strong>Why:</strong> {item["reasoning"]}
+                            <strong>Agent:</strong> <code>{html.escape(item["agent_name"])}</code> •
+                            <strong>Why:</strong> {html.escape(item["reasoning"])}
                         </div>
                         <div style="color:#64748b; font-size:0.84rem;">
-                            <em>Context:</em> {item["description"]}
+                            <em>Context:</em> {html.escape(item["description"])}
                         </div>
                     </div>
                     """,
@@ -1190,9 +1201,9 @@ elif page == "📣 Social & Campaigns" and selected_business:
                                 else p["content"]
                             )
                             posts_html += (
-                                f"<div style='background:#f8fafc; border-radius:6px; padding:4px 6px; "
+                                f"<div style='background:#f8fafc; color:#0f172a; border-radius:6px; padding:4px 6px; "
                                 f"margin-bottom:4px; font-size:0.75rem;'>"
-                                f"<strong>{p['platform'].title()}</strong> ({p['status']})<br/>{snippet}</div>"
+                                f"<strong>{html.escape(p['platform'].title())}</strong> ({html.escape(p['status'])})<br/>{html.escape(snippet)}</div>"
                             )
                         if not posts_html:
                             posts_html = (
@@ -1231,10 +1242,10 @@ elif page == "📣 Social & Campaigns" and selected_business:
                     f"""
                     <div class="metric-card" style="margin-bottom:0.75rem;">
                         <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <strong>{p["platform"].title()}</strong>
+                            <strong>{html.escape(p["platform"].title())}</strong>
                             {status_badge(p["status"])}
                         </div>
-                        <p style="margin:0.55rem 0; color:#1e293b; white-space:pre-wrap;">{p["content"]}</p>
+                        <p style="margin:0.55rem 0; color:#1e293b; white-space:pre-wrap;">{html.escape(p["content"])}</p>
                         <div style="margin-top:0.6rem; color:#475569; font-size:0.82rem;">
                             ❤️ {p.get("engagement_likes", 0)} Likes &nbsp;|&nbsp;
                             💬 {p.get("engagement_comments", 0)} Comments &nbsp;|&nbsp;
@@ -1301,16 +1312,16 @@ elif page == "⭐ Reviews" and selected_business:
                     <div class="metric-card" style="margin-bottom:0.5rem;">
                         <div style="display:flex; justify-content:space-between; align-items:center;">
                             <div>
-                                <strong>{rev["reviewer_name"]}</strong>
+                                <strong>{html.escape(rev["reviewer_name"])}</strong>
                                 <span style="color:#f59e0b; margin-left:0.5rem;">{stars} ({rev["rating"]}/5)</span>
-                                <span style="color:#64748b; font-size:0.82rem;"> • {rev["platform"].title()}</span>
+                                <span style="color:#64748b; font-size:0.82rem;"> • {html.escape(rev["platform"].title())}</span>
                             </div>
                             <div>
                                 {sentiment_badge(rev.get("sentiment"))}
                                 {status_badge(rev["response_status"])}
                             </div>
                         </div>
-                        <p style="margin:0.5rem 0; color:#1e293b;">{rev.get("review_text") or ""}</p>
+                        <p style="margin:0.5rem 0; color:#1e293b;">{html.escape(rev.get("review_text") or "")}</p>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -1605,7 +1616,7 @@ elif page == "📅 Bookings & Orders" and selected_business:
                 with oc2:
                     st.markdown(status_badge(o["status"]), unsafe_allow_html=True)
                 with oc3:
-                    next_opts = ["confirmed", "preparing", "ready", "completed", "cancelled"]
+                    next_opts = ["new", "confirmed", "preparing", "ready", "completed", "cancelled"]
                     new_stat = st.selectbox(
                         "Update",
                         next_opts,

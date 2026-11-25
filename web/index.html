@@ -101,13 +101,13 @@
       <label>Active Business</label>
       <select id="bizSelect" onchange="switchBusiness()"></select>
     </div>
-    <button class="nav-btn active" onclick="showTab('home', this)">🏠 Home & Health Score</button>
-    <button class="nav-btn" onclick="showTab('wizard', this)">✨ 60-Sec Launch Wizard</button>
-    <button class="nav-btn" onclick="showTab('chat', this)">💬 AI Command & Voice</button>
-    <button class="nav-btn" onclick="showTab('approvals', this)">🤖 HITL Approval Inbox <span id="apBadge" class="badge b-med">0</span></button>
-    <button class="nav-btn" onclick="showTab('whatsapp', this)">📱 WhatsApp Concierge</button>
-    <button class="nav-btn" onclick="showTab('crm', this)">👥 CRM & Competitors</button>
-    <button class="nav-btn" onclick="showTab('storefront', this)">🌐 Storefront & QR</button>
+    <button class="nav-btn active" data-tab="home" onclick="showTab('home', this)">🏠 Home & Health Score</button>
+    <button class="nav-btn" data-tab="wizard" onclick="showTab('wizard', this)">✨ 60-Sec Launch Wizard</button>
+    <button class="nav-btn" data-tab="chat" onclick="showTab('chat', this)">💬 AI Command & Voice</button>
+    <button class="nav-btn" data-tab="approvals" onclick="showTab('approvals', this)">🤖 HITL Approval Inbox <span id="apBadge" class="badge b-med">0</span></button>
+    <button class="nav-btn" data-tab="whatsapp" onclick="showTab('whatsapp', this)">📱 WhatsApp Concierge</button>
+    <button class="nav-btn" data-tab="crm" onclick="showTab('crm', this)">👥 CRM & Competitors</button>
+    <button class="nav-btn" data-tab="storefront" onclick="showTab('storefront', this)">🌐 Storefront & QR</button>
     <div style="margin-top:auto; padding-top:0.8rem; border-top:1px solid var(--border);">
       <label>Backend API URL</label>
       <input id="apiUrlInput" placeholder="http://127.0.0.1:8000" />
@@ -288,6 +288,35 @@
       }
     }
 
+    async function apiRequestStrict(path, opts = {}) {
+      const res = await fetch(`${API_BASE}${path}`, {
+        headers: { 'Content-Type': 'application/json' },
+        ...opts
+      });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try {
+          const err = await res.json();
+          if (err && err.detail) msg = err.detail;
+        } catch {}
+        throw new Error(msg);
+      }
+      return await res.json();
+    }
+
+    function escapeHtml(text) {
+      return String(text ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function renderRichText(text) {
+      return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    }
+
     function saveApiUrl() {
       API_BASE = document.getElementById('apiUrlInput').value.trim().replace(/\/$/, '') || defaultOrigin;
       localStorage.setItem('bizpresence_api_url', API_BASE);
@@ -309,7 +338,7 @@
 
       const businesses = LIVE_MODE ? (await apiFetch('/api/businesses/') || SANDBOX_DB.businesses) : SANDBOX_DB.businesses;
       const sel = document.getElementById('bizSelect');
-      sel.innerHTML = businesses.map(b => `<option value="${b.id}">${b.name} (${b.category})</option>`).join('');
+      sel.innerHTML = businesses.map(b => `<option value="${b.id}">${escapeHtml(b.name)} (${escapeHtml(b.category)})</option>`).join('');
       if (businesses.length && !businesses.some(b => b.id === ACTIVE_BIZ_ID)) ACTIVE_BIZ_ID = businesses[0].id;
       sel.value = ACTIVE_BIZ_ID;
       await refreshActiveBusiness();
@@ -322,7 +351,9 @@
 
     async function refreshActiveBusiness() {
       await loadHome();
+      await loadChatHistory();
       await loadApprovals();
+      await loadWhatsAppHistory();
       await loadCRM();
       renderStorefrontTab();
     }
@@ -330,10 +361,9 @@
     function showTab(name, btn) {
       document.querySelectorAll('main > section').forEach(s => s.style.display = 'none');
       document.getElementById(`tab-${name}`).style.display = 'block';
-      if (btn) {
-        document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-      }
+      const targetBtn = btn || document.querySelector(`.nav-btn[data-tab="${name}"]`);
+      document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+      if (targetBtn) targetBtn.classList.add('active');
       const titles = {
         home: 'Home & Health Score',
         wizard: '60-Second Digital Launch Wizard',
@@ -344,15 +374,6 @@
         storefront: 'Customer Storefront & Printable QR'
       };
       document.getElementById('pageTitle').textContent = titles[name] || 'BizPresence AI';
-    }
-
-    function renderRichText(text) {
-      const escaped = String(text || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-      return escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     }
 
     async function loadHome() {
@@ -388,9 +409,9 @@
       `;
       document.getElementById('pillarsList').innerHTML = health.pillars.map(p => `
         <div style="margin-bottom:0.75rem;">
-          <div style="display:flex;justify-content:space-between;font-size:0.88rem;"><strong>${p.name}</strong><span>${p.score}/${p.max_score}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:0.88rem;"><strong>${escapeHtml(p.name)}</strong><span>${p.score}/${p.max_score}</span></div>
           <div class="progress-track"><div class="progress-fill" style="width:${(p.score/p.max_score)*100}%"></div></div>
-          <div class="muted">${p.tip}</div>
+          <div class="muted">${escapeHtml(p.tip)}</div>
         </div>
       `).join('');
     }
@@ -423,26 +444,41 @@
         auto_schedule_starter_posts: true
       };
       if (!payload.name) return alert('Please enter your shop name.');
-      let res = LIVE_MODE ? await apiFetch('/api/agent/magic-onboard', { method: 'POST', body: JSON.stringify(payload) }) : null;
-      if (!res) {
+      let res;
+      if (LIVE_MODE) {
+        try {
+          res = await apiRequestStrict('/api/agent/magic-onboard', { method: 'POST', body: JSON.stringify(payload) });
+        } catch (err) {
+          document.getElementById('wizResult').innerHTML = `<div class="trace-box" style="border-color:var(--red);">❌ ${escapeHtml(err.message)}</div>`;
+          return;
+        }
+      } else {
         const newId = SANDBOX_DB.businesses.length + 1;
         SANDBOX_DB.businesses.push({ id: newId, ...payload, google_business_id: `ChIJ_Demo_${newId}` });
         res = { summary: `Launched ${payload.name} with verified Google Business Profile, starter catalog & 3 social posts!`, health_score: 84, business: { id: newId } };
       }
-      document.getElementById('wizResult').innerHTML = `<div class="trace-box">✅ ${res.summary} (Score: ${res.health_score}/100)</div>`;
+      document.getElementById('wizResult').innerHTML = `<div class="trace-box">✅ ${renderRichText(res.summary)} (Score: ${res.health_score}/100)</div>`;
       ACTIVE_BIZ_ID = res.business.id;
       await initApp();
+    }
+
+    async function loadChatHistory() {
+      const box = document.getElementById('chatBox');
+      box.innerHTML = '';
+      if (!LIVE_MODE) return;
+      const items = await apiFetch(`/api/agent/${ACTIVE_BIZ_ID}/history?session_id=web_${ACTIVE_BIZ_ID}`) || [];
+      items.forEach(m => appendChat(m.role, m.content, m.agent_trace || []));
     }
 
     function appendChat(role, text, trace = []) {
       const box = document.getElementById('chatBox');
       const div = document.createElement('div');
       div.className = `bubble ${role}`;
-      div.textContent = text;
+      div.innerHTML = renderRichText(text);
       if (trace.length) {
         const t = document.createElement('div');
         t.className = 'trace-box';
-        t.innerHTML = '<strong>🔍 LangGraph Trace:</strong><br/>' + trace.map(s => `• <code>${s.agent}</code> → ${s.tool}: ${s.detail}`).join('<br/>');
+        t.innerHTML = '<strong>🔍 LangGraph Trace:</strong><br/>' + trace.map(s => `• <code>${escapeHtml(s.agent)}</code> → ${escapeHtml(s.tool)}: ${escapeHtml(s.detail)}`).join('<br/>');
         div.appendChild(t);
       }
       box.appendChild(div);
@@ -458,8 +494,18 @@
       inp.value = '';
       appendChat('user', msg);
       const autoExec = document.getElementById('autoExecToggle').checked;
-      let res = LIVE_MODE ? await apiFetch(`/api/agent/${ACTIVE_BIZ_ID}/chat`, { method: 'POST', body: JSON.stringify({ message: msg, auto_execute: autoExec }) }) : null;
-      if (!res) {
+      let res;
+      if (LIVE_MODE) {
+        try {
+          res = await apiRequestStrict(`/api/agent/${ACTIVE_BIZ_ID}/chat`, {
+            method: 'POST',
+            body: JSON.stringify({ message: msg, auto_execute: autoExec, session_id: `web_${ACTIVE_BIZ_ID}` })
+          });
+        } catch (err) {
+          appendChat('assistant', `Error: ${err.message}`, []);
+          return;
+        }
+      } else {
         res = {
           reply: `Handled "${msg}" in Sandbox mode.\n\n• Planned specialist workflow\n• Drafted brand-checked output\n• Verified quality score 96/100`,
           agent_trace: [
@@ -488,7 +534,7 @@
     async function loadApprovals() {
       const items = LIVE_MODE
         ? (await apiFetch(`/api/agent/${ACTIVE_BIZ_ID}/approvals?status=pending`) || [])
-        : SANDBOX_DB.approvals.filter(a => a.status === 'pending');
+        : SANDBOX_DB.approvals.filter(a => a.status === 'pending' && a.business_id === ACTIVE_BIZ_ID);
       document.getElementById('apBadge').textContent = items.length;
       const el = document.getElementById('approvalsList');
       if (!items.length) {
@@ -499,9 +545,9 @@
         const draft = (a.payload && (a.payload.response_text || a.payload.content)) || '';
         const cls = a.risk_level === 'high' ? 'b-high' : (a.risk_level === 'medium' ? 'b-med' : 'b-low');
         return `<div class="card" style="margin-bottom:0.85rem;background:#0f172a;">
-          <div style="display:flex;justify-content:space-between;align-items:center;"><strong>${a.title}</strong><span class="badge ${cls}">${a.risk_level}</span></div>
-          <div class="muted" style="margin:0.35rem 0;">${a.agent_name} — ${a.reasoning}</div>
-          <textarea id="edit-${a.id}" rows="3">${draft}</textarea>
+          <div style="display:flex;justify-content:space-between;align-items:center;"><strong>${escapeHtml(a.title)}</strong><span class="badge ${cls}">${escapeHtml(a.risk_level)}</span></div>
+          <div class="muted" style="margin:0.35rem 0;">${escapeHtml(a.agent_name)} — ${escapeHtml(a.reasoning)}</div>
+          <textarea id="edit-${a.id}" rows="3">${escapeHtml(draft)}</textarea>
           <div style="display:flex;gap:0.6rem;">
             <button class="btn success" onclick="decideApproval(${a.id}, 'approve')">✅ Approve & Execute</button>
             <button class="btn danger" onclick="decideApproval(${a.id}, 'reject')">✖ Reject</button>
@@ -513,14 +559,32 @@
     async function decideApproval(id, decision) {
       const edited = document.getElementById(`edit-${id}`)?.value;
       if (LIVE_MODE) {
-        await apiFetch(`/api/agent/${ACTIVE_BIZ_ID}/approvals/${id}/decide`, {
-          method: 'POST', body: JSON.stringify({ decision, edited_content: edited })
-        });
+        try {
+          await apiRequestStrict(`/api/agent/${ACTIVE_BIZ_ID}/approvals/${id}/decide`, {
+            method: 'POST', body: JSON.stringify({ decision, edited_content: edited })
+          });
+        } catch (err) {
+          alert(`Could not process approval: ${err.message}`);
+          return;
+        }
       } else {
         const item = SANDBOX_DB.approvals.find(a => a.id === id);
         if (item) item.status = decision === 'approve' ? 'executed' : 'rejected';
       }
-      await loadApprovals();
+      await refreshActiveBusiness();
+    }
+
+    async function loadWhatsAppHistory() {
+      const waEl = document.getElementById('waLog');
+      if (LIVE_MODE) {
+        const rows = await apiFetch(`/api/whatsapp/${ACTIVE_BIZ_ID}/messages`) || [];
+        waEl.innerHTML = rows.slice(-12).map(w =>
+          `<div class="trace-box"><strong>${escapeHtml(w.sender_name)} (${escapeHtml(w.agent_used || w.direction)}):</strong> ${renderRichText(w.message_text)}</div>`
+        ).join('') || '<div class="muted">No WhatsApp messages yet.</div>';
+      } else {
+        const rows = SANDBOX_DB.waMessages.filter(w => w.business_id === ACTIVE_BIZ_ID);
+        waEl.innerHTML = rows.map(w => `<div class="trace-box"><strong>${escapeHtml(w.role)}:</strong> ${renderRichText(w.text)}</div>`).join('');
+      }
     }
 
     async function sendWhatsApp() {
@@ -528,43 +592,66 @@
       if (!msg) return;
       const role = document.getElementById('waRole').value;
       const name = document.getElementById('waName').value.trim() || 'Guest';
-      let res = LIVE_MODE
-        ? await apiFetch(`/api/whatsapp/${ACTIVE_BIZ_ID}/message`, {
+      let res;
+      if (LIVE_MODE) {
+        try {
+          res = await apiRequestStrict(`/api/whatsapp/${ACTIVE_BIZ_ID}/message`, {
             method: 'POST', body: JSON.stringify({ sender_role: role, sender_name: name, sender_phone: '+91 98765 43210', message: msg })
-          })
-        : null;
-      if (!res) res = { agent_used: 'WhatsAppConciergeAgent (Sandbox)', reply: `Got it, ${name}! Received "${msg}" and processed your request.` };
+          });
+        } catch (err) {
+          alert(`WhatsApp error: ${err.message}`);
+          return;
+        }
+      } else {
+        res = { agent_used: 'WhatsAppConciergeAgent (Sandbox)', reply: `Got it, ${name}! Received "${msg}" and processed your request.` };
+        SANDBOX_DB.waMessages.push({ business_id: ACTIVE_BIZ_ID, role: name, text: msg }, { business_id: ACTIVE_BIZ_ID, role: res.agent_used, text: res.reply });
+      }
       document.getElementById('waInput').value = '';
-      SANDBOX_DB.waMessages.push({ role: name, text: msg }, { role: res.agent_used, text: res.reply });
-      document.getElementById('waLog').innerHTML = SANDBOX_DB.waMessages.map(w => `<div class="trace-box"><strong>${w.role}:</strong> ${w.text}</div>`).join('');
+      await loadWhatsAppHistory();
     }
 
     async function loadCRM() {
       const custs = LIVE_MODE ? (await apiFetch(`/api/crm/${ACTIVE_BIZ_ID}/customers`) || []) : SANDBOX_DB.customers;
       document.getElementById('crmList').innerHTML = custs.map(c => `
         <div style="padding:0.55rem 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;">
-          <div><strong>${c.name}</strong> <span class="badge b-low">${c.segment}</span><div class="muted">${c.visit_count} visit(s) • $${c.total_spent}</div></div>
+          <div><strong>${escapeHtml(c.name)}</strong> <span class="badge b-low">${escapeHtml(c.segment)}</span><div class="muted">${c.visit_count} visit(s) • $${Number(c.total_spent || 0).toFixed(2)}</div></div>
           <div><strong>${c.loyalty_points} pts</strong></div>
         </div>
       `).join('') || '<div class="muted">No customers yet.</div>';
 
-      const compData = LIVE_MODE ? await apiFetch(`/api/crm/${ACTIVE_BIZ_ID}/competitors`) : { competitors: SANDBOX_DB.competitors, recommended_counter_strategies: ['Differentiate on pickup speed & QR ordering!'] };
+      const compData = LIVE_MODE
+        ? (await apiFetch(`/api/crm/${ACTIVE_BIZ_ID}/competitors`) || { competitors: [], recommended_counter_strategies: [] })
+        : { competitors: SANDBOX_DB.competitors, recommended_counter_strategies: ['Differentiate on pickup speed & QR ordering!'] };
       document.getElementById('compList').innerHTML = `
-        ${(compData.recommended_counter_strategies || []).map(s => `<div class="trace-box">💡 ${s}</div>`).join('')}
-        ${(compData.competitors || []).map(cp => `<div style="margin-top:0.65rem;"><strong>${cp.name}</strong> (${cp.price_tier}) — ★ ${cp.rating} (${cp.review_count} reviews)<div class="muted">Weakness: ${cp.weaknesses || '—'}</div></div>`).join('')}
+        ${(compData.recommended_counter_strategies || []).map(s => `<div class="trace-box">💡 ${escapeHtml(s)}</div>`).join('')}
+        ${(compData.competitors || []).map(cp => `<div style="margin-top:0.65rem;"><strong>${escapeHtml(cp.name)}</strong> (${escapeHtml(cp.price_tier)}) — ★ ${cp.rating} (${cp.review_count} reviews)<div class="muted">Weakness: ${escapeHtml(cp.weaknesses || '—')}</div></div>`).join('')}
       `;
     }
 
     async function queueRetention() {
-      if (LIVE_MODE) await apiFetch(`/api/crm/${ACTIVE_BIZ_ID}/retention-offers`, { method: 'POST' });
-      alert('Personalized loyalty offers queued in the Approval Inbox!');
+      if (LIVE_MODE) {
+        try {
+          const res = await apiRequestStrict(`/api/crm/${ACTIVE_BIZ_ID}/retention-offers`, { method: 'POST' });
+          alert(`Queued ${res.queued_count} personalized loyalty offer(s) in the Approval Inbox!`);
+        } catch (err) {
+          alert(`Retention offer failed: ${err.message}`);
+          return;
+        }
+      } else {
+        alert('Personalized loyalty offers queued in the Approval Inbox!');
+      }
       await loadApprovals();
     }
 
     async function runAutopilotNow() {
       if (LIVE_MODE) {
-        const res = await apiFetch(`/api/agent/${ACTIVE_BIZ_ID}/autopilot/run`, { method: 'POST' });
-        alert(`Autopilot done! Published: ${res.published_posts}, Auto-replied: ${res.auto_replied_reviews}, Queued: ${res.queued_approvals}`);
+        try {
+          const res = await apiRequestStrict(`/api/agent/${ACTIVE_BIZ_ID}/autopilot/run`, { method: 'POST' });
+          alert(`Autopilot done! Published: ${res.published_posts}, Auto-replied: ${res.auto_replied_reviews}, Queued: ${res.queued_approvals}`);
+        } catch (err) {
+          alert(`Autopilot error: ${err.message}`);
+          return;
+        }
       } else {
         alert('Autopilot cycle simulated in Sandbox mode!');
       }

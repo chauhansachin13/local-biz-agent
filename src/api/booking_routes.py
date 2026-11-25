@@ -194,10 +194,21 @@ async def export_bookings_ics(
     )
     bookings = list((await db.execute(stmt)).scalars().all())
 
+    def _ics_escape(val: str) -> str:
+        return (
+            str(val or "")
+            .replace("\\", "\\\\")
+            .replace("\r\n", "\\n")
+            .replace("\n", "\\n")
+            .replace("\r", "")
+            .replace(";", "\\;")
+            .replace(",", "\\,")
+        )
+
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        f"PRODID:-//BizPresence AI//{business.name}//EN",
+        f"PRODID:-//BizPresence AI//{_ics_escape(business.name)}//EN",
         "CALSCALE:GREGORIAN",
     ]
     for b in bookings:
@@ -209,8 +220,8 @@ async def export_bookings_ics(
                 f"UID:booking-{b.id}@bizpresence.local",
                 f"DTSTART:{start_dt.strftime('%Y%m%dT%H%M%S')}",
                 f"DTEND:{end_dt.strftime('%Y%m%dT%H%M%S')}",
-                f"SUMMARY:{b.service} - {b.customer_name}",
-                f"DESCRIPTION:Phone: {b.customer_phone} | Status: {b.status.value}",
+                f"SUMMARY:{_ics_escape(b.service)} - {_ics_escape(b.customer_name)}",
+                f"DESCRIPTION:Phone: {_ics_escape(b.customer_phone)} | Status: {b.status.value}",
                 "END:VEVENT",
             ]
         )
