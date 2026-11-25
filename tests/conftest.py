@@ -1,123 +1,138 @@
 """Pytest fixtures for BizPresence AI test suite."""
 
-from collections.abc import Generator
-from datetime import datetime, timedelta, timezone
+from collections.abc import AsyncGenerator
+from datetime import UTC, date, datetime, time, timedelta
 
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from app.database import Base, get_db
-from app.main import app
-from app.models import Booking, Business, Review, SocialPost
+from src.database.db import Base, get_db
+from src.main import app
+from src.models.booking import Booking, BookingStatus
+from src.models.business import Business
+from src.models.review import ResponseStatus, Review, Sentiment
+from src.models.social_post import PostStatus, SocialPlatform, SocialPost
+
+TEST_DB_URL = "sqlite+aiosqlite://"
 
 
-@pytest.fixture(scope="function")
-def test_db() -> Generator[Session, None, None]:
-    """Create an isolated in-memory SQLite database for each test."""
-    engine = create_engine(
-        "sqlite:///:memory:",
+@pytest_asyncio.fixture(scope="function")
+async def async_engine():
+    engine = create_async_engine(
+        TEST_DB_URL,
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    Base.metadata.create_all(bind=engine)
-
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-        Base.metadata.drop_all(bind=engine)
-        engine.dispose()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield engine
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
 
 
-@pytest.fixture(scope="function")
-def test_client(test_db: Session) -> Generator[TestClient, None, None]:
-    """Provide a FastAPI TestClient wired to the isolated test database."""
+@pytest_asyncio.fixture(scope="function")
+async def db_session(async_engine) -> AsyncGenerator[AsyncSession, None]:
+    session_factory = async_sessionmaker(
+        bind=async_engine, class_=AsyncSession, expire_on_commit=False
+    )
+    async with session_factory() as session:
+        yield session
 
-    def override_get_db() -> Generator[Session, None, None]:
-        try:
-            yield test_db
-        finally:
-            pass
+
+@pytest_asyncio.fixture(scope="function")
+async def test_client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
+    """Provide an httpx AsyncClient wired to the test database."""
+
+    async def override_get_db():
+        yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as client:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
     app.dependency_overrides.clear()
 
 
-@pytest.fixture(scope="function")
-def sample_business(test_db: Session) -> Business:
-    """Create and persist a sample local business in the test database."""
+@pytest_asyncio.fixture(scope="function")
+async def sample_business(db_session: AsyncSession) -> Business:
+    """Create and persist a sample local business."""
+    now = datetime.now(UTC)
     business = Business(
         name="Sunrise Artisan Bakery",
-        category="Bakery & Cafe",
+        category="Bakery",
         description="Neighborhood sourdough bakery and specialty coffee shop.",
-        address="42 Maple Street, Austin, TX 78701",
+        address="42 Maple Street",
+        city="Austin",
+        state="TX",
+        zip_code="78701",
         phone="+1-512-555-0199",
+        email="hello@sunrisebakery.com",
         website="https://sunrisebakery.example.com",
-        hours="Mon-Sun 07:00-18:00",
+        operating_hours={"monday": {"open": "07:00", "close": "18:00", "closed": False}},
+        created_at=now,
+        updated_at=now,
     )
-    test_db.add(business)
-    test_db.commit()
-    test_db.refresh(business)
+    db_session.add(business)
+    await db_session.commit()
+    await db_session.refresh(business)
     return business
 
 
-@pytest.fixture(scope="function")
-def sample_review(test_db: Session, sample_business: Business) -> Review:
-    """Create and persist a sample customer review for the sample business."""
+@pytest_asyncio.fixture(scope="function")
+async def sample_review(db_session: AsyncSession, sample_business: Business) -> Review:
+    """Create and persist a sample customer review."""
     review = Review(
         business_id=sample_business.id,
-        author_name="Maya Lin",
+        platform="google",
+        reviewer_name="Maya Lin",
         rating=5,
-        comment="Best rosemary sourdough in town and super friendly baristas!",
-        sentiment="positive",
-        sentiment_score=0.95,
-        reply_text=None,
+        review_text="Best rosemary sourdough in town and super friendly baristas!",
+        response_status=ResponseStatus.PENDING,
+        sentiment=Sentiment.POSITIVE,
+        created_at=datetime.now(UTC),
     )
-    test_db.add(review)
-    test_db.commit()
-    test_db.refresh(review)
+    db_session.add(review)
+    await db_session.commit()
+    await db_session.refresh(review)
     return review
 
 
-@pytest.fixture(scope="function")
-def sample_post(test_db: Session, sample_business: Business) -> SocialPost:
-    """Create and persist a sample social media post for the sample business."""
+@pytest_asyncio.fixture(scope="function")
+async def sample_post(db_session: AsyncSession, sample_business: Business) -> SocialPost:
+    """Create and persist a sample social media post."""
     post = SocialPost(
         business_id=sample_business.id,
-        platform="instagram",
+        platform=SocialPlatform.INSTAGRAM,
         content="Fresh croissants out of the oven every morning at 7 AM!",
-        hashtags="#ArtisanBakery #FreshBaked #ShopLocal",
-        status="draft",
+        status=PostStatus.DRAFT,
+        created_at=datetime.now(UTC),
     )
-    test_db.add(post)
-    test_db.commit()
-    test_db.refresh(post)
+    db_session.add(post)
+    await db_session.commit()
+    await db_session.refresh(post)
     return post
 
 
-@pytest.fixture(scope="function")
-def sample_booking(test_db: Session, sample_business: Business) -> Booking:
-    """Create and persist a sample booking for the sample business."""
-    start_time = datetime.now(timezone.utc).replace(
-        hour=14, minute=0, second=0, microsecond=0
-    ) + timedelta(days=1)
+@pytest_asyncio.fixture(scope="function")
+async def sample_booking(db_session: AsyncSession, sample_business: Business) -> Booking:
+    """Create and persist a sample booking."""
+    tomorrow = date.today() + timedelta(days=1)
     booking = Booking(
         business_id=sample_business.id,
         customer_name="Alex Rivera",
         customer_email="alex.rivera@example.com",
-        service_name="Private Cake Tasting",
-        scheduled_at=start_time,
+        customer_phone="+1-512-555-0100",
+        service="Private Cake Tasting",
+        booking_date=tomorrow,
+        booking_time=time(14, 0),
         duration_minutes=60,
-        status="confirmed",
+        status=BookingStatus.CONFIRMED,
+        created_at=datetime.now(UTC),
     )
-    test_db.add(booking)
-    test_db.commit()
-    test_db.refresh(booking)
+    db_session.add(booking)
+    await db_session.commit()
+    await db_session.refresh(booking)
     return booking

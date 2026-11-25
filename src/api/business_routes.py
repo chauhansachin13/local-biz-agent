@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
 import uuid
+from datetime import UTC, date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
@@ -84,13 +84,17 @@ async def setup_google_profile(
     business = await get_business_or_404(db, business_id)
 
     gbp_id = (
-        payload.google_business_id
-        or business.google_business_id
-        or f"ChIJ_{uuid.uuid4().hex[:14]}"
+        payload.google_business_id or business.google_business_id or f"ChIJ_{uuid.uuid4().hex[:14]}"
     )
     checklist = [
-        {"item": "Business name & category", "completed": bool(business.name and business.category)},
-        {"item": "Physical address / service area", "completed": bool(business.address or payload.service_area)},
+        {
+            "item": "Business name & category",
+            "completed": bool(business.name and business.category),
+        },
+        {
+            "item": "Physical address / service area",
+            "completed": bool(business.address or payload.service_area),
+        },
         {"item": "Phone & website", "completed": bool(business.phone or business.website)},
         {"item": "Operating hours configured", "completed": bool(business.operating_hours)},
         {"item": "Google Business ID linked", "completed": bool(gbp_id)},
@@ -98,9 +102,7 @@ async def setup_google_profile(
     completed_count = sum(1 for item in checklist if item["completed"])
     completeness_score = int((completed_count / len(checklist)) * 100)
     gbp_status = (
-        "verified"
-        if payload.verify_now and completeness_score >= 80
-        else "pending_verification"
+        "verified" if payload.verify_now and completeness_score >= 80 else "pending_verification"
     )
 
     business.google_business_id = gbp_id
@@ -164,17 +166,15 @@ async def get_business_dashboard(
     average_rating = (
         round(sum(r.rating for r in reviews) / total_reviews, 2) if total_reviews else 0.0
     )
-    pending_reviews = sum(
-        1 for r in reviews if r.response_status == ResponseStatus.PENDING
-    )
+    pending_reviews = sum(1 for r in reviews if r.response_status == ResponseStatus.PENDING)
 
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     week_ago = now_utc - timedelta(days=7)
 
     def _as_utc(dt: datetime | None) -> datetime:
         if dt is None:
             return now_utc
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
     posts_this_week = sum(1 for p in posts if _as_utc(p.created_at) >= week_ago)
     scheduled_posts = sum(1 for p in posts if p.status == PostStatus.SCHEDULED)
@@ -184,14 +184,10 @@ async def get_business_dashboard(
 
     today = date.today()
     upcoming_bookings = sum(
-        1
-        for b in bookings
-        if b.booking_date >= today and b.status != BookingStatus.CANCELLED
+        1 for b in bookings if b.booking_date >= today and b.status != BookingStatus.CANCELLED
     )
     bookings_today = sum(
-        1
-        for b in bookings
-        if b.booking_date == today and b.status != BookingStatus.CANCELLED
+        1 for b in bookings if b.booking_date == today and b.status != BookingStatus.CANCELLED
     )
 
     activities: list[ActivityItem] = []

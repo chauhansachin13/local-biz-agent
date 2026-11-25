@@ -10,16 +10,16 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
 
 # In-memory mock store for GBP state during a session
-_MOCK_PROFILES: Dict[str, Dict[str, Any]] = {}
-_MOCK_QA: Dict[str, List[Dict[str, Any]]] = {
+_MOCK_PROFILES: dict[str, dict[str, Any]] = {}
+_MOCK_QA: dict[str, list[dict[str, Any]]] = {
     "default": [
         {
             "question_id": "qa_101",
@@ -57,7 +57,7 @@ def update_business_profile(business_data: dict) -> str:
         **existing,
         **business_data,
         "location_id": location_id,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(UTC).isoformat(),
     }
     _MOCK_PROFILES[location_id] = updated
 
@@ -80,9 +80,7 @@ def update_business_profile(business_data: dict) -> str:
 
 
 @tool
-def post_google_update(
-    location_id: str, content: str, image_url: Optional[str] = None
-) -> str:
+def post_google_update(location_id: str, content: str, image_url: str | None = None) -> str:
     """Publish a local update/post to a Google Business Profile listing.
 
     Args:
@@ -97,7 +95,7 @@ def post_google_update(
         return json.dumps({"status": "error", "message": "Post content cannot be empty."})
 
     post_id = f"gbp_post_{uuid.uuid4().hex[:10]}"
-    published_at = datetime.now(timezone.utc).isoformat()
+    published_at = datetime.now(UTC).isoformat()
 
     logger.info(
         "[GBP Stub] Published Google Business post_id=%s location_id=%s has_image=%s",
@@ -134,7 +132,7 @@ def get_business_insights(location_id: str, days: int = 30) -> dict:
     """
     days = max(1, min(days, 365))
     scale = days / 30.0
-    end_date = datetime.now(timezone.utc).date()
+    end_date = datetime.now(UTC).date()
     start_date = end_date - timedelta(days=days)
 
     insights = {
@@ -192,7 +190,7 @@ def update_business_hours(location_id: str, hours: dict) -> str:
     """
     profile = _MOCK_PROFILES.setdefault(location_id, {"location_id": location_id})
     profile["hours"] = hours
-    profile["hours_updated_at"] = datetime.now(timezone.utc).isoformat()
+    profile["hours_updated_at"] = datetime.now(UTC).isoformat()
 
     logger.info(
         "[GBP Stub] Updated operating hours for location_id=%s days=%s",
@@ -216,7 +214,7 @@ def update_business_hours(location_id: str, hours: dict) -> str:
 def manage_business_photos(
     location_id: str,
     action: str,
-    photo_url: Optional[str] = None,
+    photo_url: str | None = None,
     category: str = "ADDITIONAL",
 ) -> str:
     """Add, list, or remove photos on a Google Business Profile listing.
@@ -231,12 +229,14 @@ def manage_business_photos(
         JSON string with photo operation result.
     """
     profile = _MOCK_PROFILES.setdefault(location_id, {"location_id": location_id, "photos": []})
-    photos: List[Dict[str, Any]] = profile.setdefault("photos", [])
+    photos: list[dict[str, Any]] = profile.setdefault("photos", [])
     normalized_action = action.strip().lower()
 
     if normalized_action == "list":
         logger.info("[GBP Stub] Listed %d photos for location_id=%s", len(photos), location_id)
-        return json.dumps({"status": "success", "location_id": location_id, "photos": photos}, indent=2)
+        return json.dumps(
+            {"status": "success", "location_id": location_id, "photos": photos}, indent=2
+        )
 
     if not photo_url:
         return json.dumps({"status": "error", "message": "photo_url is required for add/remove."})
@@ -246,7 +246,7 @@ def manage_business_photos(
             "photo_id": f"gbp_photo_{uuid.uuid4().hex[:8]}",
             "url": photo_url,
             "category": category.upper(),
-            "uploaded_at": datetime.now(timezone.utc).isoformat(),
+            "uploaded_at": datetime.now(UTC).isoformat(),
         }
         photos.append(entry)
         logger.info("[GBP Stub] Added photo to location_id=%s category=%s", location_id, category)
@@ -257,7 +257,9 @@ def manage_business_photos(
         profile["photos"] = [p for p in photos if p.get("url") != photo_url]
         removed = before - len(profile["photos"])
         logger.info("[GBP Stub] Removed %d photo(s) from location_id=%s", removed, location_id)
-        return json.dumps({"status": "removed", "location_id": location_id, "removed_count": removed}, indent=2)
+        return json.dumps(
+            {"status": "removed", "location_id": location_id, "removed_count": removed}, indent=2
+        )
 
     return json.dumps({"status": "error", "message": f"Unsupported action '{action}'."})
 
@@ -266,8 +268,8 @@ def manage_business_photos(
 def handle_business_qa(
     location_id: str,
     action: str = "list",
-    question_id: Optional[str] = None,
-    answer_text: Optional[str] = None,
+    question_id: str | None = None,
+    answer_text: str | None = None,
 ) -> str:
     """List customer Q&A entries or post an official owner answer on Google Business Profile.
 
@@ -283,7 +285,9 @@ def handle_business_qa(
     items = _MOCK_QA.setdefault(location_id, [dict(q) for q in _MOCK_QA["default"]])
     if action.strip().lower() == "list":
         logger.info("[GBP Stub] Fetched %d Q&A entries for location_id=%s", len(items), location_id)
-        return json.dumps({"status": "success", "location_id": location_id, "questions": items}, indent=2)
+        return json.dumps(
+            {"status": "success", "location_id": location_id, "questions": items}, indent=2
+        )
 
     if action.strip().lower() == "answer":
         if not question_id or not answer_text:
@@ -293,13 +297,15 @@ def handle_business_qa(
         for item in items:
             if item["question_id"] == question_id:
                 item["answer"] = answer_text
-                item["answered_at"] = datetime.now(timezone.utc).isoformat()
+                item["answered_at"] = datetime.now(UTC).isoformat()
                 logger.info(
                     "[GBP Stub] Answered Q&A question_id=%s on location_id=%s",
                     question_id,
                     location_id,
                 )
-                return json.dumps({"status": "answered", "location_id": location_id, "item": item}, indent=2)
+                return json.dumps(
+                    {"status": "answered", "location_id": location_id, "item": item}, indent=2
+                )
         return json.dumps({"status": "error", "message": f"Question '{question_id}' not found."})
 
     return json.dumps({"status": "error", "message": f"Unsupported action '{action}'."})

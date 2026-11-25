@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import enum
-from datetime import date, datetime, time, timezone
-from typing import TYPE_CHECKING, Optional
+from datetime import UTC, date, datetime, time
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Date, DateTime, Enum, ForeignKey, Integer, String, Text, Time
@@ -15,10 +15,10 @@ if TYPE_CHECKING:
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
-class BookingStatus(str, enum.Enum):
+class BookingStatus(enum.StrEnum):
     """Lifecycle status of a customer booking."""
 
     CONFIRMED = "confirmed"
@@ -49,7 +49,7 @@ class Booking(Base):
         default=BookingStatus.PENDING,
         index=True,
     )
-    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utc_now
     )
@@ -69,7 +69,7 @@ class BookingBase(BaseModel):
     booking_time: time
     duration_minutes: int = Field(default=30, ge=5, le=1440)
     status: BookingStatus = BookingStatus.PENDING
-    notes: Optional[str] = None
+    notes: str | None = None
 
 
 class BookingCreate(BookingBase):
@@ -79,15 +79,15 @@ class BookingCreate(BookingBase):
 class BookingUpdate(BaseModel):
     """Schema for partially updating an existing booking."""
 
-    customer_name: Optional[str] = Field(default=None, min_length=1, max_length=255)
-    customer_email: Optional[str] = Field(default=None, min_length=3, max_length=255)
-    customer_phone: Optional[str] = Field(default=None, min_length=5, max_length=30)
-    service: Optional[str] = Field(default=None, min_length=1, max_length=255)
-    booking_date: Optional[date] = None
-    booking_time: Optional[time] = None
-    duration_minutes: Optional[int] = Field(default=None, ge=5, le=1440)
-    status: Optional[BookingStatus] = None
-    notes: Optional[str] = None
+    customer_name: str | None = Field(default=None, min_length=1, max_length=255)
+    customer_email: str | None = Field(default=None, min_length=3, max_length=255)
+    customer_phone: str | None = Field(default=None, min_length=5, max_length=30)
+    service: str | None = Field(default=None, min_length=1, max_length=255)
+    booking_date: date | None = None
+    booking_time: time | None = None
+    duration_minutes: int | None = Field(default=None, ge=5, le=1440)
+    status: BookingStatus | None = None
+    notes: str | None = None
 
 
 class BookingResponse(BookingBase):

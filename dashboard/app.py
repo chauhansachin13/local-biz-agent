@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
 import os
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 import httpx
@@ -138,17 +138,19 @@ def api_request(
             try:
                 err_data = resp.json()
                 detail = err_data.get("detail") or resp.text
-            except Exception:
+            except ValueError:
                 detail = resp.text
             return False, f"API Error ({resp.status_code}): {detail}"
         return True, resp.json()
     except httpx.ConnectError:
         return (
             False,
-            f"Cannot connect to FastAPI backend at `{API_BASE_URL}`. "
-            "Ensure the API server is running.",
+            (
+                f"Cannot connect to FastAPI backend at `{API_BASE_URL}`. "
+                "Ensure the API server is running."
+            ),
         )
-    except Exception as exc:
+    except (httpx.HTTPError, ValueError) as exc:
         return False, f"Request failed: {exc}"
 
 
@@ -184,8 +186,8 @@ def render_header(business: dict[str, Any], subtitle: str) -> None:
     st.markdown(
         f"""
         <div class="biz-header">
-            <h1>🏪 {business['name']}</h1>
-            <p>{business.get('category', '').title()}{loc_part} — {subtitle}</p>
+            <h1>🏪 {business["name"]}</h1>
+            <p>{business.get("category", "").title()}{loc_part} — {subtitle}</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -216,9 +218,7 @@ with st.sidebar:
 
     selected_business: dict[str, Any] | None = None
     if businesses:
-        biz_labels = {
-            f"{b['name']} ({b['category'].title()})": b for b in businesses
-        }
+        biz_labels = {f"{b['name']} ({b['category'].title()})": b for b in businesses}
         chosen_label = st.selectbox(
             "Select Business",
             options=list(biz_labels.keys()),
@@ -306,19 +306,17 @@ if page == "Dashboard Overview" and selected_business:
             st.info("No recent activity yet.")
         else:
             for item in activities:
-                icon = {"review": "⭐", "social": "📱", "booking": "📅"}.get(
-                    item["type"], "🔔"
-                )
+                icon = {"review": "⭐", "social": "📱", "booking": "📅"}.get(item["type"], "🔔")
                 ts = item["timestamp"][:16].replace("T", " ")
                 st.markdown(
                     f"""
                     <div class="activity-card">
                         <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <strong>{icon} {item['title']}</strong>
-                            {status_badge(item['status'])}
+                            <strong>{icon} {item["title"]}</strong>
+                            {status_badge(item["status"])}
                         </div>
                         <div style="color:#475569; font-size:0.88rem; margin-top:0.35rem;">
-                            {item['detail']}
+                            {item["detail"]}
                         </div>
                         <div style="color:#94a3b8; font-size:0.75rem; margin-top:0.3rem;">
                             {ts} UTC
@@ -342,13 +340,13 @@ if page == "Dashboard Overview" and selected_business:
                     f"""
                     <div class="suggestion-card">
                         <span style="color:{prio_color}; font-weight:700; font-size:0.75rem; text-transform:uppercase;">
-                            ● {sug['priority']} priority • {sug['category']}
+                            ● {sug["priority"]} priority • {sug["category"]}
                         </span>
                         <div style="font-weight:600; font-size:1rem; margin:0.25rem 0;">
-                            {sug['title']}
+                            {sug["title"]}
                         </div>
                         <div style="color:#475569; font-size:0.86rem;">
-                            {sug['description']}
+                            {sug["description"]}
                         </div>
                     </div>
                     """,
@@ -491,7 +489,9 @@ elif page == "Social Media" and selected_business:
                             },
                         )
                     if ok_sub:
-                        st.success(f"Post #{sub_res['id']} saved with status `{sub_res['status']}`!")
+                        st.success(
+                            f"Post #{sub_res['id']} saved with status `{sub_res['status']}`!"
+                        )
                     else:
                         st.error(sub_res)
 
@@ -501,11 +501,11 @@ elif page == "Social Media" and selected_business:
                 f"""
                 <div class="metric-card">
                     <div style="display:flex; justify-content:space-between;">
-                        <strong>{selected_business['name']}</strong>
+                        <strong>{selected_business["name"]}</strong>
                         <span class="badge badge-info">{platform}</span>
                     </div>
                     <p style="margin-top:0.8rem; white-space:pre-wrap; color:#1e293b;">
-                        {content_text or 'Your post preview will appear here...'}
+                        {content_text or "Your post preview will appear here..."}
                     </p>
                 </div>
                 """,
@@ -534,18 +534,24 @@ elif page == "Social Media" and selected_business:
                     with cols[idx]:
                         posts_html = ""
                         for p in day_obj["posts"]:
-                            snippet = (p["content"][:42] + "…") if len(p["content"]) > 42 else p["content"]
+                            snippet = (
+                                (p["content"][:42] + "…")
+                                if len(p["content"]) > 42
+                                else p["content"]
+                            )
                             posts_html += (
                                 f"<div style='background:#f8fafc; border-radius:6px; padding:4px 6px; "
                                 f"margin-bottom:4px; font-size:0.75rem;'>"
                                 f"<strong>{p['platform'].title()}</strong> ({p['status']})<br/>{snippet}</div>"
                             )
                         if not posts_html:
-                            posts_html = "<div style='color:#94a3b8; font-size:0.75rem;'>No posts</div>"
+                            posts_html = (
+                                "<div style='color:#94a3b8; font-size:0.75rem;'>No posts</div>"
+                            )
                         st.markdown(
                             f"""
                             <div class="calendar-day">
-                                <div class="calendar-day-title">{day_obj['date']}</div>
+                                <div class="calendar-day-title">{day_obj["date"]}</div>
                                 {posts_html}
                             </div>
                             """,
@@ -554,7 +560,9 @@ elif page == "Social Media" and selected_business:
 
     with tab_history:
         f1, f2 = st.columns(2)
-        plat_filter = f1.selectbox("Filter Platform", ["All", "instagram", "facebook", "google", "twitter"])
+        plat_filter = f1.selectbox(
+            "Filter Platform", ["All", "instagram", "facebook", "google", "twitter"]
+        )
         stat_filter = f2.selectbox("Filter Status", ["All", "published", "scheduled", "draft"])
         params: dict[str, Any] = {}
         if plat_filter != "All":
@@ -573,14 +581,14 @@ elif page == "Social Media" and selected_business:
                     f"""
                     <div class="metric-card" style="margin-bottom:0.75rem;">
                         <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <strong>{p['platform'].title()}</strong>
-                            {status_badge(p['status'])}
+                            <strong>{p["platform"].title()}</strong>
+                            {status_badge(p["status"])}
                         </div>
-                        <p style="margin:0.55rem 0; color:#1e293b; white-space:pre-wrap;">{p['content']}</p>
+                        <p style="margin:0.55rem 0; color:#1e293b; white-space:pre-wrap;">{p["content"]}</p>
                         <div style="margin-top:0.6rem; color:#475569; font-size:0.82rem;">
-                            ❤️ {p.get('engagement_likes', 0)} Likes &nbsp;|&nbsp;
-                            💬 {p.get('engagement_comments', 0)} Comments &nbsp;|&nbsp;
-                            🔁 {p.get('engagement_shares', 0)} Shares
+                            ❤️ {p.get("engagement_likes", 0)} Likes &nbsp;|&nbsp;
+                            💬 {p.get("engagement_comments", 0)} Comments &nbsp;|&nbsp;
+                            🔁 {p.get("engagement_shares", 0)} Shares
                         </div>
                     </div>
                     """,
@@ -615,7 +623,9 @@ elif page == "Reviews" and selected_business:
                     json_body={"only_positive": False, "min_rating": 1, "max_count": 25},
                 )
                 if ok_auto:
-                    st.success(f"Auto-responded to {auto_res['processed_count']} pending review(s)!")
+                    st.success(
+                        f"Auto-responded to {auto_res['processed_count']} pending review(s)!"
+                    )
                     st.rerun()
                 else:
                     st.error(auto_res)
@@ -639,16 +649,16 @@ elif page == "Reviews" and selected_business:
                     <div class="metric-card" style="margin-bottom:0.5rem;">
                         <div style="display:flex; justify-content:space-between; align-items:center;">
                             <div>
-                                <strong>{rev['reviewer_name']}</strong>
-                                <span style="color:#f59e0b; margin-left:0.5rem;">{stars} ({rev['rating']}/5)</span>
-                                <span style="color:#64748b; font-size:0.82rem;"> • {rev['platform'].title()}</span>
+                                <strong>{rev["reviewer_name"]}</strong>
+                                <span style="color:#f59e0b; margin-left:0.5rem;">{stars} ({rev["rating"]}/5)</span>
+                                <span style="color:#64748b; font-size:0.82rem;"> • {rev["platform"].title()}</span>
                             </div>
                             <div>
-                                {sentiment_badge(rev.get('sentiment'))}
-                                {status_badge(rev['response_status'])}
+                                {sentiment_badge(rev.get("sentiment"))}
+                                {status_badge(rev["response_status"])}
                             </div>
                         </div>
-                        <p style="margin:0.5rem 0; color:#1e293b;">{rev.get('review_text') or ''}</p>
+                        <p style="margin:0.5rem 0; color:#1e293b;">{rev.get("review_text") or ""}</p>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -723,10 +733,7 @@ elif page == "Reviews" and selected_business:
 
             with ch2:
                 rat_df = pd.DataFrame(
-                    [
-                        {"Stars": f"{k} ★", "Count": v}
-                        for k, v in an["rating_distribution"].items()
-                    ]
+                    [{"Stars": f"{k} ★", "Count": v} for k, v in an["rating_distribution"].items()]
                 )
                 if HAS_PLOTLY:
                     fig_rat = px.bar(
@@ -804,52 +811,59 @@ elif page == "Bookings" and selected_business:
                 with row_c2:
                     st.markdown(status_badge(b["status"]), unsafe_allow_html=True)
                 with row_c3:
-                    if b["status"] not in {"cancelled", "completed"}:
-                        if st.button("Cancel", key=f"cancel_bk_{b['id']}"):
-                            ok_del, del_res = api_request(
-                                "DELETE", f"/api/bookings/{biz_id}/bookings/{b['id']}"
-                            )
-                            if ok_del:
-                                st.success("Booking cancelled.")
-                                st.rerun()
-                            else:
-                                st.error(del_res)
+                    if b["status"] not in {"cancelled", "completed"} and st.button(
+                        "Cancel", key=f"cancel_bk_{b['id']}"
+                    ):
+                        ok_del, del_res = api_request(
+                            "DELETE", f"/api/bookings/{biz_id}/bookings/{b['id']}"
+                        )
+                        if ok_del:
+                            st.success("Booking cancelled.")
+                            st.rerun()
+                        else:
+                            st.error(del_res)
                 st.divider()
 
-    with tab_new:
-        with st.form("new_booking_form"):
-            fc1, fc2 = st.columns(2)
-            cust_name = fc1.text_input("Customer Name*")
-            cust_phone = fc2.text_input("Phone*", placeholder="(512) 555-0199")
-            cust_email = fc1.text_input("Email*", placeholder="guest@example.com")
-            service_name = fc2.text_input("Service*", placeholder="Dinner Reservation or Haircut")
-            bk_date = fc1.date_input("Date", value=today + timedelta(days=1))
-            bk_time = fc2.time_input("Start Time", value=time(12, 0))
-            duration = st.number_input("Duration (minutes)", min_value=15, max_value=360, value=60, step=15)
-            notes = st.text_area("Notes", placeholder="Preferences, allergies, special requests...")
+    with tab_new, st.form("new_booking_form"):
+        fc1, fc2 = st.columns(2)
+        cust_name = fc1.text_input("Customer Name*")
+        cust_phone = fc2.text_input("Phone*", placeholder="(512) 555-0199")
+        cust_email = fc1.text_input("Email*", placeholder="guest@example.com")
+        service_name = fc2.text_input("Service*", placeholder="Dinner Reservation or Haircut")
+        bk_date = fc1.date_input("Date", value=today + timedelta(days=1))
+        bk_time = fc2.time_input("Start Time", value=time(12, 0))
+        duration = st.number_input(
+            "Duration (minutes)", min_value=15, max_value=360, value=60, step=15
+        )
+        notes = st.text_area("Notes", placeholder="Preferences, allergies, special requests...")
 
-            if st.form_submit_button("Create Booking", type="primary"):
-                if not cust_name.strip() or not cust_email.strip() or not cust_phone.strip() or not service_name.strip():
-                    st.warning("Customer name, email, phone, and service are required.")
+        if st.form_submit_button("Create Booking", type="primary"):
+            if (
+                not cust_name.strip()
+                or not cust_email.strip()
+                or not cust_phone.strip()
+                or not service_name.strip()
+            ):
+                st.warning("Customer name, email, phone, and service are required.")
+            else:
+                ok_create, create_res = api_request(
+                    "POST",
+                    f"/api/bookings/{biz_id}/book",
+                    json_body={
+                        "customer_name": cust_name.strip(),
+                        "customer_email": cust_email.strip(),
+                        "customer_phone": cust_phone.strip(),
+                        "service": service_name.strip(),
+                        "booking_date": bk_date.isoformat(),
+                        "booking_time": bk_time.strftime("%H:%M:%S"),
+                        "duration_minutes": int(duration),
+                        "notes": notes or None,
+                    },
+                )
+                if ok_create:
+                    st.success(f"Booking #{create_res['id']} confirmed for {cust_name}!")
                 else:
-                    ok_create, create_res = api_request(
-                        "POST",
-                        f"/api/bookings/{biz_id}/book",
-                        json_body={
-                            "customer_name": cust_name.strip(),
-                            "customer_email": cust_email.strip(),
-                            "customer_phone": cust_phone.strip(),
-                            "service": service_name.strip(),
-                            "booking_date": bk_date.isoformat(),
-                            "booking_time": bk_time.strftime("%H:%M:%S"),
-                            "duration_minutes": int(duration),
-                            "notes": notes or None,
-                        },
-                    )
-                    if ok_create:
-                        st.success(f"Booking #{create_res['id']} confirmed for {cust_name}!")
-                    else:
-                        st.error(create_res)
+                    st.error(create_res)
 
     with tab_avail:
         av1, av2 = st.columns(2)
@@ -903,7 +917,11 @@ elif page == "AI Assistant" and selected_business:
     qp1, qp2, qp3, qp4 = st.columns(4)
     quick_prompts = [
         (qp1, "📊 Performance Summary", "Give me a summary of our performance"),
-        (qp2, "📸 Create Instagram Post", "Create and schedule an Instagram post about our weekend special"),
+        (
+            qp2,
+            "📸 Create Instagram Post",
+            "Create and schedule an Instagram post about our weekend special",
+        ),
         (qp3, "⭐ Draft Review Replies", "Draft responses for all pending reviews"),
         (qp4, "📅 Today's Bookings", "Show upcoming bookings and today's open slots"),
     ]
@@ -943,7 +961,9 @@ elif page == "AI Assistant" and selected_business:
             if ok_chat:
                 reply_text = chat_res["reply"]
                 if chat_res.get("actions_taken"):
-                    reply_text += "\n\n**Actions Executed:** " + ", ".join(chat_res["actions_taken"])
+                    reply_text += "\n\n**Actions Executed:** " + ", ".join(
+                        chat_res["actions_taken"]
+                    )
                 st.markdown(reply_text)
                 st.session_state[chat_key].append({"role": "assistant", "content": reply_text})
             else:
@@ -961,7 +981,12 @@ elif page == "Settings":
         st.title("⚙️ Business Setup & Settings")
 
     tabs = st.tabs(
-        ["🏢 Business Profile", "📍 Google Business Profile", "🔑 API Keys", "➕ Register New Business"]
+        [
+            "🏢 Business Profile",
+            "📍 Google Business Profile",
+            "🔑 API Keys",
+            "➕ Register New Business",
+        ]
     )
 
     with tabs[0]:
@@ -970,7 +995,9 @@ elif page == "Settings":
                 c1, c2 = st.columns(2)
                 name = c1.text_input("Business Name", value=selected_business.get("name", ""))
                 category = c2.text_input("Category", value=selected_business.get("category", ""))
-                description = st.text_area("Description", value=selected_business.get("description") or "")
+                description = st.text_area(
+                    "Description", value=selected_business.get("description") or ""
+                )
                 address = c1.text_input("Address", value=selected_business.get("address") or "")
                 city = c2.text_input("City", value=selected_business.get("city") or "")
                 state = c1.text_input("State", value=selected_business.get("state") or "")
@@ -1025,7 +1052,9 @@ elif page == "Settings":
                 service_area = st.text_input(
                     "Service Area",
                     value=", ".join(
-                        p for p in (selected_business.get("city"), selected_business.get("state")) if p
+                        p
+                        for p in (selected_business.get("city"), selected_business.get("state"))
+                        if p
                     ),
                 )
                 attrs_raw = st.text_input(
@@ -1082,43 +1111,42 @@ elif page == "Settings":
                 }
                 st.success("API key overrides saved for this session!")
 
-    with tabs[3]:
-        with st.form("register_business_form"):
-            rc1, rc2 = st.columns(2)
-            new_name = rc1.text_input("Business Name*")
-            new_cat = rc2.selectbox(
-                "Category",
-                ["restaurant", "salon", "fitness", "retail", "medical", "automotive", "general"],
-            )
-            new_desc = st.text_area("Description", placeholder="What makes your business unique?")
-            new_addr = rc1.text_input("Street Address")
-            new_city = rc2.text_input("City")
-            new_state = rc1.text_input("State")
-            new_phone = rc2.text_input("Phone")
-            new_email = rc1.text_input("Email")
-            new_web = rc2.text_input("Website")
+    with tabs[3], st.form("register_business_form"):
+        rc1, rc2 = st.columns(2)
+        new_name = rc1.text_input("Business Name*")
+        new_cat = rc2.selectbox(
+            "Category",
+            ["restaurant", "salon", "fitness", "retail", "medical", "automotive", "general"],
+        )
+        new_desc = st.text_area("Description", placeholder="What makes your business unique?")
+        new_addr = rc1.text_input("Street Address")
+        new_city = rc2.text_input("City")
+        new_state = rc1.text_input("State")
+        new_phone = rc2.text_input("Phone")
+        new_email = rc1.text_input("Email")
+        new_web = rc2.text_input("Website")
 
-            if st.form_submit_button("Register Business", type="primary"):
-                if not new_name.strip():
-                    st.warning("Business name is required.")
+        if st.form_submit_button("Register Business", type="primary"):
+            if not new_name.strip():
+                st.warning("Business name is required.")
+            else:
+                ok_reg, reg_res = api_request(
+                    "POST",
+                    "/api/businesses/",
+                    json_body={
+                        "name": new_name.strip(),
+                        "category": new_cat,
+                        "description": new_desc or None,
+                        "address": new_addr or None,
+                        "city": new_city or None,
+                        "state": new_state or None,
+                        "phone": new_phone or None,
+                        "email": new_email or None,
+                        "website": new_web or None,
+                    },
+                )
+                if ok_reg:
+                    st.success(f"Registered **{reg_res['name']}** (ID #{reg_res['id']})!")
+                    st.rerun()
                 else:
-                    ok_reg, reg_res = api_request(
-                        "POST",
-                        "/api/businesses/",
-                        json_body={
-                            "name": new_name.strip(),
-                            "category": new_cat,
-                            "description": new_desc or None,
-                            "address": new_addr or None,
-                            "city": new_city or None,
-                            "state": new_state or None,
-                            "phone": new_phone or None,
-                            "email": new_email or None,
-                            "website": new_web or None,
-                        },
-                    )
-                    if ok_reg:
-                        st.success(f"Registered **{reg_res['name']}** (ID #{reg_res['id']})!")
-                        st.rerun()
-                    else:
-                        st.error(reg_res)
+                    st.error(reg_res)

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone
-from pathlib import Path
 import sys
+from datetime import UTC, date, datetime, time, timedelta
+from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -40,7 +40,7 @@ def seed_database(reset: bool = True) -> None:
             print("Database already populated. Skipping seed (pass reset=True to overwrite).")
             return
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         today = date.today()
 
         # ------------------------------------------------------------------

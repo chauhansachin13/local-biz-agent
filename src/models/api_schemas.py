@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 from src.models.business import BusinessResponse
 from src.models.social_post import SocialPlatform, SocialPostResponse
-
 
 # ---------------------------------------------------------------------------
 # Business Setup & Dashboard Schemas
@@ -19,8 +18,8 @@ from src.models.social_post import SocialPlatform, SocialPostResponse
 class GoogleSetupRequest(BaseModel):
     """Payload to configure/verify a Google Business Profile."""
 
-    google_business_id: Optional[str] = None
-    primary_category: Optional[str] = None
+    google_business_id: str | None = None
+    primary_category: str | None = None
     attributes: list[str] = Field(default_factory=list)
     service_area: str = ""
     verify_now: bool = True
@@ -74,7 +73,7 @@ class SocialPostCreateRequest(BaseModel):
 
     platform: SocialPlatform = SocialPlatform.INSTAGRAM
     content: str = Field(..., min_length=1)
-    image_url: Optional[str] = Field(default=None, max_length=1000)
+    image_url: str | None = Field(default=None, max_length=1000)
     status: str = "published"
 
 
@@ -83,7 +82,7 @@ class SocialPostScheduleRequest(BaseModel):
 
     platform: SocialPlatform = SocialPlatform.INSTAGRAM
     content: str = Field(..., min_length=1)
-    image_url: Optional[str] = Field(default=None, max_length=1000)
+    image_url: str | None = Field(default=None, max_length=1000)
     scheduled_at: datetime
 
 
@@ -132,7 +131,7 @@ class GenerateContentResponse(BaseModel):
 class ReviewRespondRequest(BaseModel):
     """Payload to respond to a customer review."""
 
-    response_text: Optional[str] = None
+    response_text: str | None = None
     use_ai: bool = False
     tone: str = "warm and professional"
 
@@ -183,7 +182,7 @@ class BookingCreateRequest(BaseModel):
     booking_date: date
     booking_time: time
     duration_minutes: int = Field(default=60, ge=5, le=1440)
-    notes: Optional[str] = None
+    notes: str | None = None
 
 
 class AvailabilitySlot(BaseModel):
@@ -201,8 +200,8 @@ class AvailabilityResponse(BaseModel):
     date: str
     day_of_week: str
     is_open: bool
-    open_time: Optional[str] = None
-    close_time: Optional[str] = None
+    open_time: str | None = None
+    close_time: str | None = None
     slots: list[AvailabilitySlot]
     available_count: int
 

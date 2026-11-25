@@ -67,7 +67,11 @@ class SocialMediaAgent:
             tone=tone,
             cta=cta,
         )
-        hashtags = self._build_hashtags(business, platform_clean, resolved_topic) if include_hashtags else []
+        hashtags = (
+            self._build_hashtags(business, platform_clean, resolved_topic)
+            if include_hashtags
+            else []
+        )
 
         return {
             "platform": platform_clean,

@@ -9,29 +9,56 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date, timedelta
-from typing import Dict, List
 
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
 
-_CATEGORY_IDEAS: Dict[str, List[Dict[str, str]]] = {
+_CATEGORY_IDEAS: dict[str, list[dict[str, str]]] = {
     "restaurant": [
-        {"title": "Chef's Behind-the-Scenes Prep", "format": "Reel / Short Video", "goal": "Authenticity & reach"},
+        {
+            "title": "Chef's Behind-the-Scenes Prep",
+            "format": "Reel / Short Video",
+            "goal": "Authenticity & reach",
+        },
         {"title": "Signature Dish Spotlight", "format": "Carousel Post", "goal": "Foot traffic"},
-        {"title": "Customer Favorite Review Quote", "format": "Static Graphic", "goal": "Social proof"},
-        {"title": "Weekend Brunch / Dinner Special", "format": "Google Update + Story", "goal": "Bookings"},
+        {
+            "title": "Customer Favorite Review Quote",
+            "format": "Static Graphic",
+            "goal": "Social proof",
+        },
+        {
+            "title": "Weekend Brunch / Dinner Special",
+            "format": "Google Update + Story",
+            "goal": "Bookings",
+        },
         {"title": "Meet the Team Feature", "format": "Portrait Post", "goal": "Community trust"},
     ],
     "salon": [
         {"title": "Before & After Transformation", "format": "Carousel / Reel", "goal": "Bookings"},
         {"title": "3 At-Home Care Tips", "format": "Educational Graphic", "goal": "Saves & shares"},
-        {"title": "Stylist Spotlight & Favorite Product", "format": "Story + Post", "goal": "Authority"},
-        {"title": "Midweek Open-Slot Flash Offer", "format": "Story + Google Update", "goal": "Fill quiet hours"},
-        {"title": "Client Testimonial Highlight", "format": "Quote Graphic", "goal": "Social proof"},
+        {
+            "title": "Stylist Spotlight & Favorite Product",
+            "format": "Story + Post",
+            "goal": "Authority",
+        },
+        {
+            "title": "Midweek Open-Slot Flash Offer",
+            "format": "Story + Google Update",
+            "goal": "Fill quiet hours",
+        },
+        {
+            "title": "Client Testimonial Highlight",
+            "format": "Quote Graphic",
+            "goal": "Social proof",
+        },
     ],
     "fitness": [
-        {"title": "Member Milestone Celebration", "format": "Photo + Caption", "goal": "Retention & referrals"},
+        {
+            "title": "Member Milestone Celebration",
+            "format": "Photo + Caption",
+            "goal": "Retention & referrals",
+        },
         {"title": "60-Second Form Check Tip", "format": "Short Video", "goal": "Engagement"},
         {"title": "Coach Q&A Session", "format": "Stories Poll", "goal": "Community interaction"},
         {"title": "7-Day Intro Pass Offer", "format": "Promo Post", "goal": "Lead generation"},
@@ -39,12 +66,28 @@ _CATEGORY_IDEAS: Dict[str, List[Dict[str, str]]] = {
     ],
 }
 
-_DEFAULT_IDEAS: List[Dict[str, str]] = [
-    {"title": "Behind-the-Scenes Day in the Life", "format": "Short Video / Reel", "goal": "Brand warmth"},
-    {"title": "Customer Story & 5-Star Review Spotlight", "format": "Quote Card", "goal": "Trust & conversions"},
+_DEFAULT_IDEAS: list[dict[str, str]] = [
+    {
+        "title": "Behind-the-Scenes Day in the Life",
+        "format": "Short Video / Reel",
+        "goal": "Brand warmth",
+    },
+    {
+        "title": "Customer Story & 5-Star Review Spotlight",
+        "format": "Quote Card",
+        "goal": "Trust & conversions",
+    },
     {"title": "Top 3 FAQs Answered Simply", "format": "Carousel", "goal": "Education & saves"},
-    {"title": "Neighborhood / Local Partner Shoutout", "format": "Photo Post", "goal": "Local reach"},
-    {"title": "Limited-Time Seasonal Offer", "format": "Promo Graphic + GBP Post", "goal": "Direct bookings"},
+    {
+        "title": "Neighborhood / Local Partner Shoutout",
+        "format": "Photo Post",
+        "goal": "Local reach",
+    },
+    {
+        "title": "Limited-Time Seasonal Offer",
+        "format": "Promo Graphic + GBP Post",
+        "goal": "Direct bookings",
+    },
     {"title": "Meet the Founder / Team", "format": "Portrait Story", "goal": "Connection"},
     {"title": "Weekend Hours & Booking Reminder", "format": "Text + Image", "goal": "Foot traffic"},
 ]
@@ -190,9 +233,7 @@ def generate_promotional_offer(business_name: str, occasion: str) -> str:
 
 
 @tool
-def generate_blog_outline(
-    topic: str, business_name: str, tone: str = "friendly"
-) -> dict:
+def generate_blog_outline(topic: str, business_name: str, tone: str = "friendly") -> dict:
     """Create an SEO-friendly local blog post outline tailored to a business brand tone.
 
     Args:
@@ -222,9 +263,18 @@ def generate_blog_outline(
             f"Trusted local expertise with easy online booking."
         ),
         "sections": [
-            {"heading": f"Why {topic} Matters for Our Local Community", "key_points": ["Customer pain point", "Local context"]},
-            {"heading": "3 Practical Tips You Can Use Right Away", "key_points": ["Actionable tip 1", "Actionable tip 2", "Common mistake to avoid"]},
-            {"heading": f"How {business_name} Helps", "key_points": ["Signature service", "Customer testimonial", "Easy next step"]},
+            {
+                "heading": f"Why {topic} Matters for Our Local Community",
+                "key_points": ["Customer pain point", "Local context"],
+            },
+            {
+                "heading": "3 Practical Tips You Can Use Right Away",
+                "key_points": ["Actionable tip 1", "Actionable tip 2", "Common mistake to avoid"],
+            },
+            {
+                "heading": f"How {business_name} Helps",
+                "key_points": ["Signature service", "Customer testimonial", "Easy next step"],
+            },
         ],
         "call_to_action": f"Ready to experience the difference? Book your visit with {business_name} today.",
     }

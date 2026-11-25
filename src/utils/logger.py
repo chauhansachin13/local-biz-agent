@@ -1,8 +1,8 @@
 import json
 import logging
 import sys
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
+from typing import Any, ClassVar
 
 from config.settings import settings
 
@@ -15,11 +15,11 @@ class ColoredStructuredFormatter(logging.Formatter):
     RESET = "\033[0m"
     DIM = "\033[2m"
     BOLD = "\033[1m"
-    LEVEL_COLORS = {
-        logging.DEBUG: "\033[36m",     # Cyan
-        logging.INFO: "\033[32m",      # Green
-        logging.WARNING: "\033[33m",   # Yellow
-        logging.ERROR: "\033[31m",     # Red
+    LEVEL_COLORS: ClassVar[dict[int, str]] = {
+        logging.DEBUG: "\033[36m",  # Cyan
+        logging.INFO: "\033[32m",  # Green
+        logging.WARNING: "\033[33m",  # Yellow
+        logging.ERROR: "\033[31m",  # Red
         logging.CRITICAL: "\033[35m",  # Magenta
     }
 
@@ -28,9 +28,7 @@ class ColoredStructuredFormatter(logging.Formatter):
         self.use_color = use_color
 
     def format(self, record: logging.LogRecord) -> str:
-        timestamp = datetime.fromtimestamp(record.created, tz=timezone.utc).strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
+        timestamp = datetime.fromtimestamp(record.created, tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
         level_name = f"{record.levelname:<8}"
         message = record.getMessage()
 

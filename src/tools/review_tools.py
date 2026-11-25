@@ -10,8 +10,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timezone
-from typing import Any, Dict, List
+from datetime import UTC, datetime
+from typing import Any
 
 from langchain_core.tools import tool
 
@@ -79,8 +79,8 @@ _CRITICAL_KEYWORDS = {
     "injury",
 }
 
-_FLAGGED_REVIEWS: List[Dict[str, Any]] = []
-_REVIEW_RESPONSES: Dict[str, Dict[str, Any]] = {}
+_FLAGGED_REVIEWS: list[dict[str, Any]] = []
+_REVIEW_RESPONSES: dict[str, dict[str, Any]] = {}
 
 
 @tool
@@ -221,7 +221,7 @@ def respond_to_review(platform: str, review_id: str, response: str) -> str:
         "platform": platform.strip().lower(),
         "review_id": review_id,
         "response": response.strip(),
-        "responded_at": datetime.now(timezone.utc).isoformat(),
+        "responded_at": datetime.now(UTC).isoformat(),
     }
     _REVIEW_RESPONSES[review_id] = record
 
@@ -294,9 +294,7 @@ def analyze_review_sentiment(review_text: str) -> dict:
 
 
 @tool
-def flag_critical_review(
-    platform: str, review_id: str, reason: str, severity: str = "high"
-) -> str:
+def flag_critical_review(platform: str, review_id: str, reason: str, severity: str = "high") -> str:
     """Flag a critical negative review for immediate human manager attention.
 
     Args:
@@ -314,7 +312,7 @@ def flag_critical_review(
         "review_id": review_id,
         "severity": severity.strip().lower(),
         "reason": reason,
-        "flagged_at": datetime.now(timezone.utc).isoformat(),
+        "flagged_at": datetime.now(UTC).isoformat(),
     }
     _FLAGGED_REVIEWS.append(ticket)
     logger.warning(
@@ -338,7 +336,9 @@ def get_review_trends(business_id: str, days: int = 30) -> dict:
     Returns:
         Dictionary of review KPIs and recurring customer themes.
     """
-    logger.info("[Review Stub] Calculated review trends for business_id=%s days=%d", business_id, days)
+    logger.info(
+        "[Review Stub] Calculated review trends for business_id=%s days=%d", business_id, days
+    )
     return {
         "business_id": str(business_id),
         "days": days,
@@ -348,7 +348,11 @@ def get_review_trends(business_id: str, days: int = 30) -> dict:
         "response_rate_pct": 85.7,
         "sentiment_breakdown": {"positive": 21, "neutral": 4, "negative": 3},
         "top_praised_themes": ["friendly staff", "cleanliness", "service quality"],
-        "top_improvement_areas": ["wait times during peak hours", "parking clarity", "billing follow-up"],
+        "top_improvement_areas": [
+            "wait times during peak hours",
+            "parking clarity",
+            "billing follow-up",
+        ],
     }
 
 

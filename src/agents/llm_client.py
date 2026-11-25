@@ -23,9 +23,7 @@ def _resolve_keys(overrides: dict[str, Any] | None = None) -> dict[str, str]:
             or os.getenv("GOOGLE_API_KEY", "")
         ).strip(),
         "openai": (ctx.get("openai_api_key") or os.getenv("OPENAI_API_KEY", "")).strip(),
-        "anthropic": (
-            ctx.get("anthropic_api_key") or os.getenv("ANTHROPIC_API_KEY", "")
-        ).strip(),
+        "anthropic": (ctx.get("anthropic_api_key") or os.getenv("ANTHROPIC_API_KEY", "")).strip(),
     }
 
 

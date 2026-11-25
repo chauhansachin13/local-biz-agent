@@ -3,9 +3,7 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-_EMAIL_REGEX = re.compile(
-    r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$"
-)
+_EMAIL_REGEX = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$")
 _IST_ZONE = ZoneInfo("Asia/Kolkata")
 
 
@@ -37,7 +35,11 @@ def format_phone(phone: str, default_country_code: str = "+91") -> str:
         raise ValueError(f"Invalid phone number length: '{phone}'")
 
     if not has_plus and len(digits) == 10:
-        prefix = default_country_code if default_country_code.startswith("+") else f"+{default_country_code}"
+        prefix = (
+            default_country_code
+            if default_country_code.startswith("+")
+            else f"+{default_country_code}"
+        )
         if prefix == "+91":
             return f"+91 {digits[:5]} {digits[5:]}"
         return f"{prefix} {digits[:3]}-{digits[3:6]}-{digits[6:]}"

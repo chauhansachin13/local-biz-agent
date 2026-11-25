@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Optional
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text
@@ -15,10 +15,10 @@ if TYPE_CHECKING:
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
-class SocialPlatform(str, enum.Enum):
+class SocialPlatform(enum.StrEnum):
     """Supported social media platforms."""
 
     FACEBOOK = "facebook"
@@ -27,7 +27,7 @@ class SocialPlatform(str, enum.Enum):
     GOOGLE = "google"
 
 
-class PostStatus(str, enum.Enum):
+class PostStatus(enum.StrEnum):
     """Lifecycle status of a social post."""
 
     DRAFT = "draft"
@@ -49,11 +49,11 @@ class SocialPost(Base):
         Enum(SocialPlatform, native_enum=False), nullable=False, index=True
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    image_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
-    scheduled_at: Mapped[Optional[datetime]] = mapped_column(
+    image_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    scheduled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
-    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[PostStatus] = mapped_column(
         Enum(PostStatus, native_enum=False),
         nullable=False,
@@ -76,9 +76,9 @@ class SocialPostBase(BaseModel):
     business_id: int
     platform: SocialPlatform
     content: str = Field(..., min_length=1)
-    image_url: Optional[str] = Field(default=None, max_length=1000)
-    scheduled_at: Optional[datetime] = None
-    published_at: Optional[datetime] = None
+    image_url: str | None = Field(default=None, max_length=1000)
+    scheduled_at: datetime | None = None
+    published_at: datetime | None = None
     status: PostStatus = PostStatus.DRAFT
     engagement_likes: int = Field(default=0, ge=0)
     engagement_shares: int = Field(default=0, ge=0)
@@ -92,15 +92,15 @@ class SocialPostCreate(SocialPostBase):
 class SocialPostUpdate(BaseModel):
     """Schema for partially updating a social post."""
 
-    platform: Optional[SocialPlatform] = None
-    content: Optional[str] = Field(default=None, min_length=1)
-    image_url: Optional[str] = Field(default=None, max_length=1000)
-    scheduled_at: Optional[datetime] = None
-    published_at: Optional[datetime] = None
-    status: Optional[PostStatus] = None
-    engagement_likes: Optional[int] = Field(default=None, ge=0)
-    engagement_shares: Optional[int] = Field(default=None, ge=0)
-    engagement_comments: Optional[int] = Field(default=None, ge=0)
+    platform: SocialPlatform | None = None
+    content: str | None = Field(default=None, min_length=1)
+    image_url: str | None = Field(default=None, max_length=1000)
+    scheduled_at: datetime | None = None
+    published_at: datetime | None = None
+    status: PostStatus | None = None
+    engagement_likes: int | None = Field(default=None, ge=0)
+    engagement_shares: int | None = Field(default=None, ge=0)
+    engagement_comments: int | None = Field(default=None, ge=0)
 
 
 class SocialPostResponse(SocialPostBase):

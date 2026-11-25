@@ -10,10 +10,11 @@ import json
 import logging
 import sqlite3
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any
 
 from langchain_core.tools import tool
 
@@ -158,12 +159,8 @@ def create_booking(booking_data: dict) -> str:
     service_name = str(
         booking_data.get("service_name") or booking_data.get("service") or ""
     ).strip()
-    booking_date = str(
-        booking_data.get("booking_date") or booking_data.get("date") or ""
-    ).strip()
-    booking_time = str(
-        booking_data.get("booking_time") or booking_data.get("time") or ""
-    ).strip()
+    booking_date = str(booking_data.get("booking_date") or booking_data.get("date") or "").strip()
+    booking_time = str(booking_data.get("booking_time") or booking_data.get("time") or "").strip()
 
     missing = [
         field
@@ -183,7 +180,7 @@ def create_booking(booking_data: dict) -> str:
             }
         )
 
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(UTC).isoformat()
     booking_id = f"bkg_{uuid.uuid4().hex[:10]}"
 
     with _get_db_connection() as conn:
@@ -285,7 +282,7 @@ def create_booking(booking_data: dict) -> str:
 
 
 @tool
-def cancel_booking(booking_id: str, reason: Optional[str] = None) -> str:
+def cancel_booking(booking_id: str, reason: str | None = None) -> str:
     """Cancel an existing booking by its booking ID in the SQLite database.
 
     Args:
@@ -295,16 +292,16 @@ def cancel_booking(booking_id: str, reason: Optional[str] = None) -> str:
     Returns:
         JSON string confirming cancellation or reporting if the booking was not found.
     """
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(UTC).isoformat()
     with _get_db_connection() as conn:
         cols = _get_booking_schema(conn)
         is_orm_schema = "start_time" in cols and "booking_id" not in cols
         id_col = "id" if is_orm_schema else "booking_id"
-        lookup_id: Any = int(booking_id) if (is_orm_schema and str(booking_id).isdigit()) else booking_id
+        lookup_id: Any = (
+            int(booking_id) if (is_orm_schema and str(booking_id).isdigit()) else booking_id
+        )
 
-        row = conn.execute(
-            f"SELECT * FROM bookings WHERE {id_col} = ?", (lookup_id,)
-        ).fetchone()
+        row = conn.execute(f"SELECT * FROM bookings WHERE {id_col} = ?", (lookup_id,)).fetchone()
         if not row:
             return json.dumps(
                 {"status": "not_found", "message": f"Booking '{booking_id}' was not found."}
@@ -374,7 +371,7 @@ def get_daily_bookings(business_id: str, date: str) -> list:
             (biz_id, date),
         ).fetchall()
 
-    results: List[Dict[str, Any]] = [dict(row) for row in rows]
+    results: list[dict[str, Any]] = [dict(row) for row in rows]
     logger.info(
         "[Booking DB] Fetched %d bookings for business_id=%s date=%s",
         len(results),
@@ -396,17 +393,17 @@ def reschedule_booking(booking_id: str, new_date: str, new_time: str) -> str:
     Returns:
         JSON string confirming the updated appointment or conflict details.
     """
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(UTC).isoformat()
     with _get_db_connection() as conn:
         cols = _get_booking_schema(conn)
         is_orm_schema = "start_time" in cols and "booking_id" not in cols
         id_col = "id" if is_orm_schema else "booking_id"
         time_col = "start_time" if is_orm_schema else "booking_time"
-        lookup_id: Any = int(booking_id) if (is_orm_schema and str(booking_id).isdigit()) else booking_id
+        lookup_id: Any = (
+            int(booking_id) if (is_orm_schema and str(booking_id).isdigit()) else booking_id
+        )
 
-        row = conn.execute(
-            f"SELECT * FROM bookings WHERE {id_col} = ?", (lookup_id,)
-        ).fetchone()
+        row = conn.execute(f"SELECT * FROM bookings WHERE {id_col} = ?", (lookup_id,)).fetchone()
         if not row:
             return json.dumps(
                 {"status": "not_found", "message": f"Booking '{booking_id}' not found."}
@@ -479,15 +476,13 @@ def send_booking_confirmation(booking_id: str, channel: str = "email") -> str:
         is_orm_schema = "start_time" in cols and "booking_id" not in cols
         id_col = "id" if is_orm_schema else "booking_id"
         time_col = "start_time" if is_orm_schema else "booking_time"
-        lookup_id: Any = int(booking_id) if (is_orm_schema and str(booking_id).isdigit()) else booking_id
-        row = conn.execute(
-            f"SELECT * FROM bookings WHERE {id_col} = ?", (lookup_id,)
-        ).fetchone()
+        lookup_id: Any = (
+            int(booking_id) if (is_orm_schema and str(booking_id).isdigit()) else booking_id
+        )
+        row = conn.execute(f"SELECT * FROM bookings WHERE {id_col} = ?", (lookup_id,)).fetchone()
 
     if not row:
-        return json.dumps(
-            {"status": "not_found", "message": f"Booking '{booking_id}' not found."}
-        )
+        return json.dumps({"status": "not_found", "message": f"Booking '{booking_id}' not found."})
 
     recipient = row["customer_email"] if channel == "email" else row["customer_phone"]
     logger.info(
@@ -505,7 +500,7 @@ def send_booking_confirmation(booking_id: str, channel: str = "email") -> str:
             "customer_name": row["customer_name"],
             "recipient": recipient or "on_file",
             "appointment": f"{row['booking_date']} at {row[time_col]} ({row['service_name']})",
-            "sent_at": datetime.now(timezone.utc).isoformat(),
+            "sent_at": datetime.now(UTC).isoformat(),
         },
         indent=2,
     )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -53,11 +53,7 @@ async def get_review_analytics(
 ) -> ReviewAnalyticsResponse:
     """Compute sentiment breakdown, star distribution, response rate, and trend."""
     await get_business_or_404(db, business_id)
-    stmt = (
-        select(Review)
-        .where(Review.business_id == business_id)
-        .order_by(Review.created_at.asc())
-    )
+    stmt = select(Review).where(Review.business_id == business_id).order_by(Review.created_at.asc())
     reviews = list((await db.execute(stmt)).scalars().all())
 
     total = len(reviews)
@@ -133,7 +129,7 @@ async def auto_respond_reviews(
     stmt = stmt.order_by(Review.created_at.desc()).limit(payload.max_count)
 
     pending_reviews = list((await db.execute(stmt)).scalars().all())
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     responded_ids: list[int] = []
 
     for rev in pending_reviews:
@@ -183,7 +179,7 @@ async def respond_to_review(
 
     review.response_text = reply_text
     review.response_status = ResponseStatus.RESPONDED
-    review.responded_at = datetime.now(timezone.utc)
+    review.responded_at = datetime.now(UTC)
     if review.sentiment is None:
         review.sentiment = review_agent.analyze_sentiment(review.rating, review.review_text)
 

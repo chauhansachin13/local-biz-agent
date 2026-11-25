@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import select
@@ -43,10 +43,8 @@ async def create_social_post(
 ) -> SocialPost:
     """Create and publish (or save as draft) a social media post."""
     await get_business_or_404(db, business_id)
-    now = datetime.now(timezone.utc)
-    post_status = (
-        PostStatus.DRAFT if payload.status.lower() == "draft" else PostStatus.PUBLISHED
-    )
+    now = datetime.now(UTC)
+    post_status = PostStatus.DRAFT if payload.status.lower() == "draft" else PostStatus.PUBLISHED
     post = SocialPost(
         business_id=business_id,
         platform=payload.platform,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
@@ -21,7 +21,6 @@ from src.database import get_db
 api_router = APIRouter()
 
 
-@api_router.get("/", tags=["Health"])
 @api_router.get("/health", tags=["Health"])
 async def health_check(db: AsyncSession = Depends(get_db)) -> dict:
     """Health check endpoint verifying API and database connectivity."""
@@ -35,7 +34,7 @@ async def health_check(db: AsyncSession = Depends(get_db)) -> dict:
         "status": "healthy" if db_status == "connected" else "degraded",
         "service": settings.app_name,
         "database": db_status,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
 
 

@@ -133,7 +133,8 @@ class BookingAgent:
         overlaps = sum(
             1
             for b in existing
-            if start_minutes < (b.booking_time.hour * 60 + b.booking_time.minute + b.duration_minutes)
+            if start_minutes
+            < (b.booking_time.hour * 60 + b.booking_time.minute + b.duration_minutes)
             and req_end > (b.booking_time.hour * 60 + b.booking_time.minute)
         )
         return overlaps >= self._max_concurrent(business)

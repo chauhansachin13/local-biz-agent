@@ -1,6 +1,5 @@
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,27 +23,27 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO")
 
     # Google Gemini LLM
-    gemini_api_key: Optional[str] = Field(default=None)
+    gemini_api_key: str | None = Field(default=None)
 
     # Google Business Profile & OAuth
-    google_business_account_id: Optional[str] = Field(default=None)
-    google_business_location_id: Optional[str] = Field(default=None)
-    google_client_id: Optional[str] = Field(default=None)
-    google_client_secret: Optional[str] = Field(default=None)
+    google_business_account_id: str | None = Field(default=None)
+    google_business_location_id: str | None = Field(default=None)
+    google_client_id: str | None = Field(default=None)
+    google_client_secret: str | None = Field(default=None)
 
     # Facebook Graph API
-    facebook_page_token: Optional[str] = Field(default=None)
-    facebook_page_id: Optional[str] = Field(default=None)
+    facebook_page_token: str | None = Field(default=None)
+    facebook_page_id: str | None = Field(default=None)
 
     # Instagram Graph API
-    instagram_access_token: Optional[str] = Field(default=None)
-    instagram_business_id: Optional[str] = Field(default=None)
+    instagram_access_token: str | None = Field(default=None)
+    instagram_business_id: str | None = Field(default=None)
 
     # Twitter / X API
-    twitter_api_key: Optional[str] = Field(default=None)
-    twitter_api_secret: Optional[str] = Field(default=None)
-    twitter_access_token: Optional[str] = Field(default=None)
-    twitter_access_secret: Optional[str] = Field(default=None)
+    twitter_api_key: str | None = Field(default=None)
+    twitter_api_secret: str | None = Field(default=None)
+    twitter_access_token: str | None = Field(default=None)
+    twitter_access_secret: str | None = Field(default=None)
 
     # Database
     database_url: str = Field(default="sqlite:///./bizpresence.db")

@@ -11,7 +11,7 @@ import logging
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from langchain_core.tools import tool
 
@@ -33,7 +33,7 @@ def _resolve_sqlite_path() -> Path:
     return Path("./bizpresence.db")
 
 
-def _query_booking_stats(business_id: int) -> Dict[str, int]:
+def _query_booking_stats(business_id: int) -> dict[str, int]:
     """Read live booking counts from SQLite if the database exists."""
     db_path = _resolve_sqlite_path()
     if not db_path.exists():
@@ -86,7 +86,7 @@ def aggregate_platform_metrics(business_id: str, days: int = 30) -> dict:
         biz_int = 1
 
     booking_stats = _query_booking_stats(biz_int)
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "business_id": str(business_id),
         "days": days,
         "google_business": {
@@ -161,9 +161,7 @@ def generate_performance_report(business_id: str, period: str = "weekly") -> dic
 
 
 @tool
-def identify_trends(
-    business_id: str, metric_category: str = "all", days: int = 30
-) -> dict:
+def identify_trends(business_id: str, metric_category: str = "all", days: int = 30) -> dict:
     """Identify upward, downward, and seasonal trends across engagement, reviews, and bookings.
 
     Args:
@@ -212,7 +210,7 @@ def identify_trends(
 @tool
 def suggest_data_improvements(
     business_id: str, focus_area: str = "overall"
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     """Recommend prioritized, data-backed improvements to grow local presence and conversions.
 
     Args:

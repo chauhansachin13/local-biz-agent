@@ -10,20 +10,18 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
 
-_SCHEDULED_POSTS: List[Dict[str, Any]] = []
+_SCHEDULED_POSTS: list[dict[str, Any]] = []
 
 
 @tool
-def post_to_facebook(
-    page_id: str, content: str, image_url: Optional[str] = None
-) -> str:
+def post_to_facebook(page_id: str, content: str, image_url: str | None = None) -> str:
     """Publish a post to a business Facebook Page.
 
     Args:
@@ -52,7 +50,7 @@ def post_to_facebook(
             "page_id": page_id,
             "post_id": post_id,
             "image_url": image_url,
-            "published_at": datetime.now(timezone.utc).isoformat(),
+            "published_at": datetime.now(UTC).isoformat(),
             "url": f"https://www.facebook.com/{page_id}/posts/{post_id}",
         },
         indent=2,
@@ -60,9 +58,7 @@ def post_to_facebook(
 
 
 @tool
-def post_to_instagram(
-    content: str, image_url: str, hashtags: Optional[list] = None
-) -> str:
+def post_to_instagram(content: str, image_url: str, hashtags: list | None = None) -> str:
     """Publish a photo post with caption and hashtags to Instagram Business.
 
     Args:
@@ -100,7 +96,7 @@ def post_to_instagram(
             "image_url": image_url,
             "caption": full_caption,
             "hashtag_count": len(formatted_tags),
-            "published_at": datetime.now(timezone.utc).isoformat(),
+            "published_at": datetime.now(UTC).isoformat(),
             "url": f"https://www.instagram.com/p/{media_id}/",
         },
         indent=2,
@@ -108,7 +104,7 @@ def post_to_instagram(
 
 
 @tool
-def post_to_twitter(content: str, image_url: Optional[str] = None) -> str:
+def post_to_twitter(content: str, image_url: str | None = None) -> str:
     """Publish a post to X (Twitter), enforcing the 280-character limit.
 
     Args:
@@ -129,7 +125,7 @@ def post_to_twitter(content: str, image_url: Optional[str] = None) -> str:
             }
         )
 
-    tweet_id = str(int(datetime.now(timezone.utc).timestamp() * 1000))
+    tweet_id = str(int(datetime.now(UTC).timestamp() * 1000))
     logger.info(
         "[Social Stub] Posted to Twitter/X tweet_id=%s chars=%d has_image=%s",
         tweet_id,
@@ -144,7 +140,7 @@ def post_to_twitter(content: str, image_url: Optional[str] = None) -> str:
             "tweet_id": tweet_id,
             "character_count": len(cleaned),
             "image_url": image_url,
-            "published_at": datetime.now(timezone.utc).isoformat(),
+            "published_at": datetime.now(UTC).isoformat(),
             "url": f"https://x.com/i/web/status/{tweet_id}",
         },
         indent=2,
@@ -180,7 +176,7 @@ def schedule_post(platform: str, content: str, scheduled_time: str) -> str:
         "content": content,
         "scheduled_time": scheduled_time,
         "status": "scheduled",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
     _SCHEDULED_POSTS.append(entry)
 
@@ -210,7 +206,12 @@ def get_social_metrics(platform: str, days: int = 7) -> dict:
 
     platform_baselines = {
         "facebook": {"impressions": 3420, "engagements": 245, "clicks": 94, "followers_gained": 18},
-        "instagram": {"impressions": 5180, "engagements": 490, "clicks": 132, "followers_gained": 42},
+        "instagram": {
+            "impressions": 5180,
+            "engagements": 490,
+            "clicks": 132,
+            "followers_gained": 42,
+        },
         "twitter": {"impressions": 1950, "engagements": 118, "clicks": 51, "followers_gained": 11},
     }
 
@@ -228,7 +229,7 @@ def get_social_metrics(platform: str, days: int = 7) -> dict:
         totals["engagement_rate_pct"] = round(
             (totals["engagements"] / max(totals["impressions"], 1)) * 100, 2
         )
-        result: Dict[str, Any] = {
+        result: dict[str, Any] = {
             "status": "success",
             "mode": "stub",
             "platform": "all",
@@ -238,7 +239,8 @@ def get_social_metrics(platform: str, days: int = 7) -> dict:
         }
     else:
         base = platform_baselines.get(
-            normalized, {"impressions": 2200, "engagements": 175, "clicks": 60, "followers_gained": 14}
+            normalized,
+            {"impressions": 2200, "engagements": 175, "clicks": 60, "followers_gained": 14},
         )
         metrics = {k: int(v * scale) for k, v in base.items()}
         metrics["engagement_rate_pct"] = round(

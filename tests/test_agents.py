@@ -1,241 +1,222 @@
-"""Unit tests for the BizPresence AI multi-agent system."""
+"""Unit tests for the BizPresence AI agent and tool modules."""
 
-from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from datetime import date, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.agents.booking_agent import BookingAgent
-from app.agents.content_agent import ContentAgent
-from app.agents.orchestrator import OrchestratorAgent
-from app.agents.profile_agent import ProfileAgent
-from app.agents.review_agent import ReviewAgent
+from src.agents.booking_agent import BookingAgent
+from src.agents.orchestrator import BizPresenceOrchestrator
+from src.agents.review_agent import ReviewAgent
+from src.agents.social_agent import SocialMediaAgent
+from src.models.review import Sentiment
+from src.tools.analytics_tools import aggregate_platform_metrics
+from src.tools.content_tools import generate_post_ideas, generate_promotional_offer
+from src.tools.google_tools import get_business_insights, update_business_profile
+from src.tools.review_tools import analyze_review_sentiment
+from src.utils.helpers import format_phone, generate_slug, truncate_text, validate_email
+
+# ---------------------------------------------------------------------------
+# Helper / Utility Tests
+# ---------------------------------------------------------------------------
 
 
-def _mock_llm_response(content: str) -> MagicMock:
-    """Build a mock LangChain AIMessage-like response object."""
-    response = MagicMock()
-    response.content = content
-    return response
+def test_generate_slug() -> None:
+    assert generate_slug("Chai Junction Pune") == "chai-junction-pune"
+    assert generate_slug("  Hello World!  ") == "hello-world"
+    assert generate_slug("") == ""
 
 
-@pytest.mark.parametrize(
-    ("user_prompt", "expected_intent"),
-    [
-        ("Write an Instagram post for our weekend latte promo", "content"),
-        ("Draft a reply to the 2-star Google review from yesterday", "review"),
-        ("Check if we have any open slots tomorrow at 3 PM", "booking"),
-        ("Update our Google Business description and Sunday hours", "profile"),
-    ],
-)
-def test_orchestrator_routes_to_correct_agent(
-    user_prompt: str,
-    expected_intent: str,
-) -> None:
-    """Verify OrchestratorAgent classifies intent and delegates to the matching agent."""
-    mock_llm = MagicMock()
-    mock_llm.invoke.return_value = _mock_llm_response(expected_intent)
+def test_format_phone_india() -> None:
+    result = format_phone("9876543210")
+    assert result == "+91 98765 43210"
 
-    mock_content_agent = MagicMock()
-    mock_content_agent.run.return_value = {"agent": "content", "output": "Post created"}
 
-    mock_review_agent = MagicMock()
-    mock_review_agent.run.return_value = {"agent": "review", "output": "Reply drafted"}
+def test_validate_email_valid() -> None:
+    assert validate_email("hello@example.com") is True
+    assert validate_email("user+tag@domain.co.in") is True
 
-    mock_booking_agent = MagicMock()
-    mock_booking_agent.run.return_value = {"agent": "booking", "output": "Slot available"}
 
-    mock_profile_agent = MagicMock()
-    mock_profile_agent.run.return_value = {"agent": "profile", "output": "Profile updated"}
+def test_validate_email_invalid() -> None:
+    assert validate_email("not-an-email") is False
+    assert validate_email("") is False
+    assert validate_email("@domain.com") is False
 
-    orchestrator = OrchestratorAgent(
-        llm=mock_llm,
-        agents={
-            "content": mock_content_agent,
-            "review": mock_review_agent,
-            "booking": mock_booking_agent,
-            "profile": mock_profile_agent,
-        },
+
+def test_truncate_text() -> None:
+    assert truncate_text("Hello World", max_len=5) == "He..."
+    assert truncate_text("Short", max_len=100) == "Short"
+    assert truncate_text("", max_len=10) == ""
+
+
+# ---------------------------------------------------------------------------
+# Tool Tests (mock/stub mode)
+# ---------------------------------------------------------------------------
+
+
+def test_update_business_profile_tool() -> None:
+    """Verify the Google Business profile tool returns structured mock output."""
+    result = update_business_profile.invoke(
+        {"business_data": {"name": "Test Biz", "category": "Cafe"}}
     )
+    assert "success" in result
+    assert "Test Biz" in result or "updated" in result.lower()
 
-    result = orchestrator.route(
-        message=user_prompt,
-        business_context={"id": 1, "name": "Sunrise Artisan Bakery"},
+
+def test_get_business_insights_tool() -> None:
+    """Verify insights tool returns a dict with views and metrics."""
+    result = get_business_insights.invoke({"location_id": "loc_test123", "days": 30})
+    assert isinstance(result, dict)
+    assert result["status"] == "success"
+
+
+def test_analyze_review_sentiment_tool() -> None:
+    """Verify sentiment analysis tool returns expected structure."""
+    result = analyze_review_sentiment.invoke(
+        {"review_text": "Absolutely wonderful food and service!", "rating": 5}
     )
+    assert isinstance(result, dict)
+    assert "sentiment" in result
+    assert result["sentiment"] in ("positive", "negative", "neutral", "mixed")
 
-    assert result["intent"] == expected_intent
-    assert result["agent"] == expected_intent
-    mock_llm.invoke.assert_called_once()
+
+def test_generate_post_ideas_tool() -> None:
+    """Verify post ideas tool returns a list."""
+    result = generate_post_ideas.invoke({"business_type": "Italian Restaurant", "count": 3})
+    assert isinstance(result, list)
+    assert len(result) >= 1
 
 
-def test_orchestrator_handles_unknown_intent_gracefully() -> None:
-    """Verify OrchestratorAgent falls back safely when the LLM returns an unknown intent."""
-    mock_llm = MagicMock()
-    mock_llm.invoke.side_effect = [
-        _mock_llm_response("unrecognized_category"),
-        _mock_llm_response("I can help with profiles, social posts, reviews, or bookings."),
-    ]
-
-    orchestrator = OrchestratorAgent(llm=mock_llm, agents={})
-    result = orchestrator.route(
-        message="What is the meaning of life?",
-        business_context={"id": 1, "name": "Sunrise Artisan Bakery"},
+def test_generate_promotional_offer_tool() -> None:
+    """Verify promo offer tool returns a string with the business name."""
+    result = generate_promotional_offer.invoke(
+        {"business_name": "Bella Napoli", "occasion": "Holiday Season"}
     )
-
-    assert result["intent"] == "general"
-    assert "profiles" in result["output"].lower()
-    assert mock_llm.invoke.call_count == 2
+    assert isinstance(result, str)
+    assert "Bella Napoli" in result
 
 
-def test_content_generator_creates_post() -> None:
-    """Verify ContentAgent generates a platform-tailored social post from mocked LLM output."""
-    mock_llm = MagicMock()
-    mock_llm.invoke.return_value = _mock_llm_response(
-        '{"caption": "Warm rosemary sourdough fresh out of the oven!", '
-        '"hashtags": ["#Sourdough", "#ArtisanBakery", "#LocalEats"], '
-        '"cta": "Stop by before noon for a free espresso pairing!"}'
-    )
-
-    agent = ContentAgent(llm=mock_llm)
-    post = agent.create_post(
-        business_name="Sunrise Artisan Bakery",
-        platform="instagram",
-        topic="Weekend sourdough special",
-        tone="warm and inviting",
-    )
-
-    assert post["platform"] == "instagram"
-    assert "sourdough" in post["caption"].lower()
-    assert len(post["hashtags"]) == 3
-    assert "cta" in post
-    mock_llm.invoke.assert_called_once()
+def test_aggregate_platform_metrics_tool() -> None:
+    """Verify analytics aggregation returns structured metrics."""
+    result = aggregate_platform_metrics.invoke({"business_id": "1", "days": 7})
+    assert isinstance(result, dict)
+    assert "google_business" in result or "social_media" in result
 
 
-def test_content_generator_rejects_empty_topic() -> None:
-    """Verify ContentAgent raises ValueError when topic is empty or whitespace."""
-    mock_llm = MagicMock()
-    agent = ContentAgent(llm=mock_llm)
+# ---------------------------------------------------------------------------
+# Agent Tests
+# ---------------------------------------------------------------------------
 
-    with pytest.raises(ValueError, match="topic"):
-        agent.create_post(
-            business_name="Sunrise Artisan Bakery",
-            platform="facebook",
-            topic="   ",
+
+@pytest.mark.asyncio
+async def test_social_agent_generate_post() -> None:
+    """Verify SocialMediaAgent generates a post with content and hashtags."""
+    agent = SocialMediaAgent()
+    business = MagicMock()
+    business.name = "Test Cafe"
+    business.category = "Cafe"
+    business.city = "Mumbai"
+    business.state = "MH"
+    business.description = "Best coffee in town"
+    business.website = "https://testcafe.com"
+    business.phone = "9876543210"
+
+    with patch(
+        "src.agents.social_agent.generate_text_with_llm", new_callable=AsyncMock
+    ) as mock_llm:
+        mock_llm.return_value = "Start your morning with the best brew in Mumbai!"
+        result = await agent.generate_post(
+            business=business, platform="instagram", topic="Morning coffee"
         )
-    mock_llm.invoke.assert_not_called()
+
+    assert result["platform"] == "instagram"
+    assert "Mumbai" in result["content"]
+    assert isinstance(result["hashtags"], list)
+    assert "best_time_to_post" in result
 
 
-def test_review_sentiment_analysis() -> None:
-    """Verify ReviewAgent parses sentiment, score, and urgency from customer feedback."""
-    mock_llm = MagicMock()
-    mock_llm.invoke.return_value = _mock_llm_response(
-        '{"sentiment": "negative", "score": 0.18, "urgent": true, '
-        '"summary": "Customer waited 25 minutes for a cold coffee."}'
+def test_review_agent_sentiment_classification() -> None:
+    """Verify ReviewAgent classifies positive, neutral, and negative reviews."""
+    agent = ReviewAgent()
+    assert (
+        agent.analyze_sentiment(5, "Amazing food and super friendly staff!") == Sentiment.POSITIVE
     )
-
-    agent = ReviewAgent(llm=mock_llm)
-    analysis = agent.analyze_sentiment(
-        rating=2,
-        comment="Waited 25 minutes and my latte was lukewarm.",
+    assert (
+        agent.analyze_sentiment(1, "Terrible wait, cold food, and rude service.")
+        == Sentiment.NEGATIVE
     )
-
-    assert analysis["sentiment"] == "negative"
-    assert analysis["score"] == pytest.approx(0.18)
-    assert analysis["urgent"] is True
-    assert "summary" in analysis
-    mock_llm.invoke.assert_called_once()
+    assert agent.analyze_sentiment(3, "Food was okay.") == Sentiment.NEUTRAL
 
 
-def test_review_agent_drafts_empathetic_reply() -> None:
-    """Verify ReviewAgent drafts a polite, personalized reply using business context."""
-    mock_llm = MagicMock()
-    mock_llm.invoke.return_value = _mock_llm_response(
-        "Thank you for letting us know, Jordan. We are sorry your latte took too long "
-        "and would love to make your next visit right at Sunrise Artisan Bakery."
-    )
+@pytest.mark.asyncio
+async def test_review_agent_draft_response_fallback() -> None:
+    """Verify ReviewAgent falls back cleanly when LLM is unconfigured."""
+    agent = ReviewAgent()
+    business = MagicMock()
+    business.name = "Test Cafe"
+    business.category = "Cafe"
+    business.email = "hi@testcafe.com"
+    business.phone = None
 
-    agent = ReviewAgent(llm=mock_llm)
-    reply = agent.draft_reply(
-        business_name="Sunrise Artisan Bakery",
-        author_name="Jordan",
-        rating=2,
-        comment="Long wait and lukewarm coffee.",
-    )
+    review = MagicMock()
+    review.reviewer_name = "Jordan Lee"
+    review.rating = 2
+    review.platform = "google"
+    review.review_text = "Wait was very long."
+
+    with patch(
+        "src.agents.review_agent.generate_text_with_llm", new_callable=AsyncMock
+    ) as mock_llm:
+        mock_llm.return_value = None
+        reply = await agent.draft_response(business=business, review=review)
 
     assert "Jordan" in reply
-    assert "Sunrise Artisan Bakery" in reply
-    mock_llm.invoke.assert_called_once()
+    assert "Test Cafe" in reply
+    assert "apologies" in reply.lower()
 
 
-def test_booking_availability_check() -> None:
-    """Verify BookingAgent identifies open and occupied time slots accurately."""
-    target_date = (datetime.now(timezone.utc) + timedelta(days=2)).date()
-    existing_bookings = [
-        {
-            "scheduled_at": datetime(
-                target_date.year, target_date.month, target_date.day, 10, 0, tzinfo=timezone.utc
-            ),
-            "duration_minutes": 60,
-        },
-        {
-            "scheduled_at": datetime(
-                target_date.year, target_date.month, target_date.day, 14, 0, tzinfo=timezone.utc
-            ),
-            "duration_minutes": 60,
-        },
-    ]
+@pytest.mark.asyncio
+async def test_booking_agent_day_hours_and_closed(db_session, sample_business) -> None:
+    """Verify BookingAgent respects operating hours and closed days."""
+    agent = BookingAgent()
+    sample_business.operating_hours = {
+        "monday": {"open": "09:00", "close": "12:00", "closed": False},
+        "tuesday": {"open": "09:00", "close": "12:00", "closed": True},
+    }
+    today = date.today()
+    # Find next Tuesday
+    days_until_tue = (1 - today.weekday()) % 7
+    next_tue = today + timedelta(days=days_until_tue)
+    avail = await agent.get_availability(db_session, sample_business, next_tue)
+    assert avail["is_open"] is False
+    assert avail["available_count"] == 0
 
-    agent = BookingAgent(llm=MagicMock())
-    slots = agent.check_availability(
-        target_date=target_date,
-        existing_bookings=existing_bookings,
-        open_hour=9,
-        close_hour=17,
+
+# ---------------------------------------------------------------------------
+# Orchestrator Intent Classification Tests
+# ---------------------------------------------------------------------------
+
+
+def test_orchestrator_classifies_social_intent() -> None:
+    """Verify orchestrator correctly identifies social media intents."""
+    orchestrator = BizPresenceOrchestrator()
+    assert (
+        orchestrator._classify_intent("create an instagram post about our sale") == "social_create"
     )
-
-    assert "09:00" in slots
-    assert "11:00" in slots
-    assert "10:00" not in slots
-    assert "14:00" not in slots
+    assert orchestrator._classify_intent("post a tweet about new menu") == "social_create"
 
 
-def test_booking_availability_conflict_detection() -> None:
-    """Verify BookingAgent flags overlapping appointment times as unavailable."""
-    requested = datetime(2026, 12, 1, 10, 30, tzinfo=timezone.utc)
-    existing = [
-        {
-            "scheduled_at": datetime(2026, 12, 1, 10, 0, tzinfo=timezone.utc),
-            "duration_minutes": 60,
-        }
-    ]
+def test_orchestrator_classifies_review_intent() -> None:
+    """Verify orchestrator correctly identifies review intents."""
+    orchestrator = BizPresenceOrchestrator()
+    assert orchestrator._classify_intent("respond to our pending reviews") == "review_respond"
+    assert orchestrator._classify_intent("reply to the negative feedback") == "review_respond"
 
-    agent = BookingAgent(llm=MagicMock())
-    is_available = agent.is_slot_available(
-        requested_time=requested,
-        duration_minutes=30,
-        existing_bookings=existing,
+
+def test_orchestrator_classifies_booking_intent() -> None:
+    """Verify orchestrator correctly identifies booking intents."""
+    orchestrator = BizPresenceOrchestrator()
+    assert orchestrator._classify_intent("show today's bookings") == "booking_manage"
+    assert (
+        orchestrator._classify_intent("what appointments do we have tomorrow") == "booking_manage"
     )
-
-    assert is_available is False
-
-
-def test_profile_agent_optimizes_seo_description() -> None:
-    """Verify ProfileAgent enriches a business description with local SEO terms."""
-    mock_llm = MagicMock()
-    mock_llm.invoke.return_value = _mock_llm_response(
-        "Sunrise Artisan Bakery is Austin's neighborhood destination for organic sourdough, "
-        "handcrafted pastries, and single-origin espresso on Maple Street."
-    )
-
-    with patch("app.agents.profile_agent.ProfileAgent._build_prompt", return_value="prompt"):
-        agent = ProfileAgent(llm=mock_llm)
-        optimized = agent.optimize_description(
-            business_name="Sunrise Artisan Bakery",
-            category="Bakery & Cafe",
-            city="Austin, TX",
-            current_description="We sell bread and coffee.",
-        )
-
-    assert "Austin" in optimized
-    assert "sourdough" in optimized.lower()
-    mock_llm.invoke.assert_called_once()

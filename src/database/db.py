@@ -22,6 +22,7 @@ engine = create_async_engine(
 )
 
 if is_sqlite:
+
     @event.listens_for(engine.sync_engine, "connect")
     def _set_sqlite_pragma(dbapi_connection, _connection_record) -> None:
         """Enable SQLite foreign key constraints on every connection."""

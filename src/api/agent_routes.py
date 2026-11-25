@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,6 +50,6 @@ async def get_agent_suggestions(
     raw = await orchestrator.generate_suggestions(db=db, business=business)
     return AgentSuggestionsResponse(
         business_id=business_id,
-        generated_at=datetime.now(timezone.utc),
+        generated_at=datetime.now(UTC),
         suggestions=[AgentSuggestion(**item) for item in raw],
     )

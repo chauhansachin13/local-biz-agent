@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
 import re
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -65,7 +65,7 @@ class BizPresenceOrchestrator:
                     if is_schedule
                     else (PostStatus.DRAFT if is_draft else PostStatus.PUBLISHED)
                 )
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
                 scheduled_at = (
                     (now + timedelta(days=1)).replace(hour=11, minute=30, second=0, microsecond=0)
                     if is_schedule
@@ -133,7 +133,7 @@ class BizPresenceOrchestrator:
                     k in low for k in ("auto", "all", "respond to", "reply to", "send")
                 )
                 drafts = []
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
                 for rev in pending[:10]:
                     draft = await self.review_agent.draft_response(
                         business=business, review=rev, overrides=context
@@ -160,8 +160,7 @@ class BizPresenceOrchestrator:
                 else:
                     actions_taken.append(f"Drafted AI replies for {len(drafts)} pending review(s)")
                     preview = "\n".join(
-                        f"- **{d['reviewer']} ({d['rating']}★):** {d['draft']}"
-                        for d in drafts[:3]
+                        f"- **{d['reviewer']} ({d['rating']}★):** {d['draft']}" for d in drafts[:3]
                     )
                     reply = (
                         f"You have **{len(pending)} pending review(s)**. Here are AI-drafted replies:\n\n"
@@ -212,21 +211,23 @@ class BizPresenceOrchestrator:
 
         elif intent == "analytics_overview":
             reviews = (
-                await db.execute(select(Review).where(Review.business_id == business.id))
-            ).scalars().all()
+                (await db.execute(select(Review).where(Review.business_id == business.id)))
+                .scalars()
+                .all()
+            )
             posts = (
-                await db.execute(select(SocialPost).where(SocialPost.business_id == business.id))
-            ).scalars().all()
+                (await db.execute(select(SocialPost).where(SocialPost.business_id == business.id)))
+                .scalars()
+                .all()
+            )
             bookings = (
-                await db.execute(select(Booking).where(Booking.business_id == business.id))
-            ).scalars().all()
+                (await db.execute(select(Booking).where(Booking.business_id == business.id)))
+                .scalars()
+                .all()
+            )
 
-            avg_rating = (
-                round(sum(r.rating for r in reviews) / len(reviews), 2) if reviews else 0.0
-            )
-            pending_rev = sum(
-                1 for r in reviews if r.response_status == ResponseStatus.PENDING
-            )
+            avg_rating = round(sum(r.rating for r in reviews) / len(reviews), 2) if reviews else 0.0
+            pending_rev = sum(1 for r in reviews if r.response_status == ResponseStatus.PENDING)
             upcoming_bk = sum(
                 1
                 for b in bookings

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,6 +18,15 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Initialize database tables on application startup."""
+    logger.info("Starting %s and initializing database tables...", settings.app_name)
+    await init_db()
+    yield
+
+
 app = FastAPI(
     title="BizPresence AI",
     description=(
@@ -23,6 +36,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # Allow all origins for local & containerized development
@@ -33,13 +47,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-async def on_startup() -> None:
-    """Initialize database tables on application startup."""
-    logger.info("Starting %s and initializing database tables...", settings.app_name)
-    await init_db()
 
 
 @app.exception_handler(HTTPException)
@@ -109,3 +116,8 @@ async def root() -> dict:
 
 
 app.include_router(api_router)
+
+
+def run() -> None:
+    """Run the BizPresence AI FastAPI server via Uvicorn."""
+    uvicorn.run("src.main:app", host="0.0.0.0", port=8000, reload=False)
