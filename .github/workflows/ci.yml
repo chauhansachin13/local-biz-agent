@@ -40,9 +40,9 @@ jobs:
     needs: lint
 
     env:
-      ENVIRONMENT: test
-      DATABASE_URL: sqlite+aiosqlite:///:memory:
-      GEMINI_API_KEY: test-api-key
+      ENVIRONMENT: "test"
+      DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+      GEMINI_API_KEY: "test-api-key"
 
     steps:
       - name: Checkout repository
