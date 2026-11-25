@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import os
 from datetime import date, datetime, time, timedelta
 from typing import Any
@@ -58,6 +59,7 @@ st.markdown(
     }
     .metric-card {
         background: #ffffff;
+        color: #0f172a;
         border: 1px solid #e2e8f0;
         border-radius: 12px;
         padding: 1rem 1.1rem;
@@ -65,6 +67,7 @@ st.markdown(
     }
     .activity-card {
         background: #ffffff;
+        color: #0f172a;
         border-left: 4px solid #3b82f6;
         border-radius: 8px;
         padding: 0.75rem 1rem;
@@ -1074,12 +1077,12 @@ elif page == "📣 Social & Campaigns" and selected_business:
             st.markdown(
                 f"""
                 <div class="metric-card">
-                    <div style="display:flex; justify-content:space-between;">
-                        <strong>{selected_business["name"]}</strong>
-                        <span class="badge badge-info">{platform}</span>
+                    <div style="display:flex; justify-content:space-between; color:#0f172a;">
+                        <strong style="color:#0f172a;">{html.escape(selected_business["name"])}</strong>
+                        <span class="badge badge-info">{html.escape(platform)}</span>
                     </div>
                     <p style="margin-top:0.8rem; white-space:pre-wrap; color:#1e293b;">
-                        {content_text or "Your post preview will appear here..."}
+                        {html.escape(content_text) if content_text else "Your post preview will appear here..."}
                     </p>
                 </div>
                 """,

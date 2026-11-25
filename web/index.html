@@ -346,6 +346,15 @@
       document.getElementById('pageTitle').textContent = titles[name] || 'BizPresence AI';
     }
 
+    function renderRichText(text) {
+      const escaped = String(text || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+      return escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    }
+
     async function loadHome() {
       let dash, health, brief;
       if (LIVE_MODE) {
@@ -370,7 +379,7 @@
       if (!dash) dash = { total_reviews: 5, average_rating: 3.8, posts_this_week: 3, upcoming_bookings: 4 };
       if (!brief) brief = { summary: `Good morning! Health Score: ${health.overall_score}/100 (${health.grade}).`, priority_action: health.top_recommendation };
 
-      document.getElementById('dailyBriefCard').innerHTML = `<strong>☀️ Morning AI Briefing:</strong> ${brief.summary}<div class="muted" style="margin-top:0.3rem;">Priority: ${brief.priority_action}</div>`;
+      document.getElementById('dailyBriefCard').innerHTML = `<strong>☀️ Morning AI Briefing:</strong> ${renderRichText(brief.summary)}<div class="muted" style="margin-top:0.3rem;">Priority: ${renderRichText(brief.priority_action)}</div>`;
       document.getElementById('kpiGrid').innerHTML = `
         <div class="card"><div class="muted">Health Score</div><div class="metric-val">${health.overall_score}/100 (${health.grade})</div></div>
         <div class="card"><div class="muted">Reviews</div><div class="metric-val">${dash.total_reviews} (${dash.average_rating}★)</div></div>
@@ -399,8 +408,8 @@
         };
       }
       document.getElementById('councilOutput').innerHTML = `
-        <div class="trace-box" style="margin-bottom:0.7rem;"><strong>${data.consensus_summary}</strong></div>
-        ${data.council_members.map(m => `<div style="margin-bottom:0.5rem;"><strong>${m.agent}:</strong> <span class="muted">${m.proposal}</span></div>`).join('')}
+        <div class="trace-box" style="margin-bottom:0.7rem;"><strong>${renderRichText(data.consensus_summary)}</strong></div>
+        ${data.council_members.map(m => `<div style="margin-bottom:0.5rem;"><strong>${renderRichText(m.agent)}:</strong> <span class="muted">${renderRichText(m.proposal)}</span></div>`).join('')}
       `;
     }
 

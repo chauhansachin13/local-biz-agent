@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.llm_client import generate_text_with_llm
@@ -204,8 +205,15 @@ async def get_or_create_agent_config(db: AsyncSession, business_id: int) -> Busi
         catalog_items=tpl["catalog"],
         faqs=tpl["faqs"],
     )
-    db.add(cfg)
-    await db.flush()
+    try:
+        async with db.begin_nested():
+            db.add(cfg)
+            await db.flush()
+    except IntegrityError:
+        existing = (await db.execute(stmt)).scalar_one_or_none()
+        if existing is not None:
+            return existing
+        raise
     return cfg
 
 

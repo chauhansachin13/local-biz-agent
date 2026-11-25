@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -31,6 +32,25 @@ def _classify_segment(visits: int, spent: float) -> str:
     return "New"
 
 
+def _norm_phone(phone: str | None) -> str:
+    digits = re.sub(r"\D+", "", phone or "")
+    return f"tel:{digits[-10:]}" if len(digits) >= 7 else ""
+
+
+def _norm_email(email: str | None) -> str:
+    clean = (email or "").strip().lower()
+    return f"mail:{clean}" if clean else ""
+
+
+def _norm_name(name: str | None) -> str:
+    clean = re.sub(r"\s+", " ", (name or "").strip().lower())
+    return f"name:{clean}" if clean else ""
+
+
+def _identity_keys(name: str | None, phone: str | None, email: str | None) -> list[str]:
+    return [k for k in (_norm_phone(phone), _norm_email(email), _norm_name(name)) if k]
+
+
 async def sync_customers_from_activity(db: AsyncSession, business_id: int) -> list[CustomerProfile]:
     """Build or update unified CustomerProfile rows from bookings, orders, and reviews."""
     existing = list(
@@ -42,10 +62,10 @@ async def sync_customers_from_activity(db: AsyncSession, business_id: int) -> li
         .scalars()
         .all()
     )
-    by_key: dict[str, CustomerProfile] = {}
+    existing_index: dict[str, CustomerProfile] = {}
     for cust in existing:
-        key = (cust.phone or cust.email or cust.name).strip().lower()
-        by_key[key] = cust
+        for k in _identity_keys(cust.name, cust.phone, cust.email):
+            existing_index.setdefault(k, cust)
 
     bookings = list(
         (
@@ -68,25 +88,34 @@ async def sync_customers_from_activity(db: AsyncSession, business_id: int) -> li
         (await db.execute(select(Review).where(Review.business_id == business_id))).scalars().all()
     )
 
-    agg: dict[str, dict[str, Any]] = {}
+    records: list[dict[str, Any]] = []
+    agg_index: dict[str, dict[str, Any]] = {}
 
     def _accumulate(
         name: str, phone: str | None, email: str | None, spent: float, dt: datetime | None
-    ):
-        clean_key = (phone or email or name).strip().lower()
-        if not clean_key:
+    ) -> None:
+        keys = _identity_keys(name, phone, email)
+        if not keys:
             return
-        entry = agg.setdefault(
-            clean_key,
-            {
+        entry = next((agg_index[k] for k in keys if k in agg_index), None)
+        if entry is None:
+            entry = {
                 "name": name,
                 "phone": phone,
                 "email": email,
                 "visits": 0,
                 "spent": 0.0,
                 "last": dt or datetime.now(UTC),
-            },
-        )
+                "keys": list(keys),
+            }
+            records.append(entry)
+        else:
+            for k in keys:
+                if k not in entry["keys"]:
+                    entry["keys"].append(k)
+        for k in keys:
+            agg_index[k] = entry
+
         entry["visits"] += 1
         entry["spent"] += spent
         if phone and not entry["phone"]:
@@ -104,13 +133,17 @@ async def sync_customers_from_activity(db: AsyncSession, business_id: int) -> li
         _accumulate(r.reviewer_name, None, None, 0.0, r.created_at)
 
     now = datetime.now(UTC)
-    for key, info in agg.items():
-        if key in by_key:
-            cust = by_key[key]
+    for info in records:
+        cust = next((existing_index[k] for k in info["keys"] if k in existing_index), None)
+        if cust is not None:
             cust.visit_count = max(cust.visit_count, info["visits"])
             cust.total_spent = max(cust.total_spent, round(info["spent"], 2))
             cust.loyalty_points = cust.visit_count * 15 + int(cust.total_spent)
             cust.segment = _classify_segment(cust.visit_count, cust.total_spent)
+            if info["phone"] and not cust.phone:
+                cust.phone = info["phone"]
+            if info["email"] and not cust.email:
+                cust.email = info["email"]
         else:
             cust = CustomerProfile(
                 business_id=business_id,
@@ -124,7 +157,8 @@ async def sync_customers_from_activity(db: AsyncSession, business_id: int) -> li
                 last_visit_at=info["last"] or now,
             )
             db.add(cust)
-            by_key[key] = cust
+        for k in info["keys"]:
+            existing_index[k] = cust
 
     await db.flush()
     return list(
