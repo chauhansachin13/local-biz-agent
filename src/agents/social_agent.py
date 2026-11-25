@@ -27,6 +27,7 @@ class SocialMediaAgent:
         tone: str = "friendly and engaging",
         include_hashtags: bool = True,
         call_to_action: str = "",
+        language: str = "English",
         overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Generate tailored post copy, hashtags, best time, and image prompt."""
@@ -39,6 +40,7 @@ class SocialMediaAgent:
         system_prompt = (
             "You are an expert local business social media strategist. "
             "Write concise, high-converting posts tailored to the platform and local community. "
+            f"Write the post in {language}. "
             "Return ONLY the post body copy without hashtags."
         )
         user_prompt = (
@@ -48,6 +50,7 @@ class SocialMediaAgent:
             f"Platform: {platform_clean}\n"
             f"Topic: {resolved_topic}\n"
             f"Tone: {tone}\n"
+            f"Language: {language}\n"
             f"Call to action: {cta}\n"
             "Write an engaging 2-4 sentence social post."
         )

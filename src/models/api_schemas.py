@@ -216,11 +216,13 @@ class AgentChatRequest(BaseModel):
 
     message: str = Field(..., min_length=1)
     auto_execute: bool = True
+    session_id: str = "default"
+    language: str | None = None
     context: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentChatResponse(BaseModel):
-    """Orchestrator chat reply with actions and suggested follow-ups."""
+    """Orchestrator chat reply with multi-agent trace, approvals, and follow-ups."""
 
     business_id: int
     reply: str
@@ -228,6 +230,10 @@ class AgentChatResponse(BaseModel):
     actions_taken: list[str] = Field(default_factory=list)
     data: dict[str, Any] = Field(default_factory=dict)
     suggested_followups: list[str] = Field(default_factory=list)
+    plan: list[str] = Field(default_factory=list)
+    agent_trace: list[dict[str, Any]] = Field(default_factory=list)
+    queued_approvals: list[dict[str, Any]] = Field(default_factory=list)
+    health_score: int | None = None
 
 
 class AgentSuggestion(BaseModel):
@@ -248,3 +254,77 @@ class AgentSuggestionsResponse(BaseModel):
     business_id: int
     generated_at: datetime
     suggestions: list[AgentSuggestion]
+
+
+class MagicOnboardRequest(BaseModel):
+    """60-second zero-tech onboarding payload to launch a shop's full digital presence."""
+
+    name: str = Field(..., min_length=1, max_length=255)
+    category: str = Field(..., min_length=1, max_length=120)
+    city: str = Field(default="", max_length=120)
+    state: str = Field(default="", max_length=120)
+    address: str = Field(default="", max_length=500)
+    phone: str = Field(default="", max_length=30)
+    email: str = Field(default="", max_length=255)
+    preferred_language: str = Field(default="English", max_length=40)
+    specialty: str = Field(default="", max_length=300)
+    auto_schedule_starter_posts: bool = True
+
+
+class MagicOnboardResponse(BaseModel):
+    """Result of 1-click AI business onboarding."""
+
+    business: BusinessResponse
+    google_setup: GoogleSetupResponse
+    starter_posts_created: int
+    catalog_items_created: int
+    health_score: int
+    summary: str
+    agent_trace: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class CampaignRequest(BaseModel):
+    """Request to launch a coordinated multi-channel campaign."""
+
+    occasion: str = Field(..., min_length=1, max_length=160)
+    offer_details: str = Field(default="", max_length=300)
+    platforms: list[SocialPlatform] = Field(
+        default_factory=lambda: [
+            SocialPlatform.INSTAGRAM,
+            SocialPlatform.FACEBOOK,
+            SocialPlatform.GOOGLE,
+        ]
+    )
+    auto_execute: bool = False
+    schedule_start_days: int = Field(default=1, ge=0, le=30)
+
+
+class CampaignResponse(BaseModel):
+    """Response summarizing generated multi-platform campaign assets."""
+
+    business_id: int
+    occasion: str
+    posts_created: int
+    approvals_queued: int
+    assets: list[dict[str, Any]]
+    agent_trace: list[dict[str, Any]]
+
+
+class HealthPillar(BaseModel):
+    """Individual dimension of the Digital Presence Health Score."""
+
+    name: str
+    score: int
+    max_score: int
+    status: str
+    tip: str
+
+
+class PresenceHealthScoreResponse(BaseModel):
+    """0-100 Digital Presence Health Score breakdown."""
+
+    business_id: int
+    overall_score: int
+    grade: str
+    pillars: list[HealthPillar]
+    top_recommendation: str

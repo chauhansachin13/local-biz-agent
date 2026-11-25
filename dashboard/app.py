@@ -1,4 +1,4 @@
-"""BizPresence AI — Comprehensive Streamlit Dashboard."""
+"""BizPresence AI — Comprehensive, Zero-Tech-Friendly Streamlit Command Center."""
 
 from __future__ import annotations
 
@@ -38,12 +38,12 @@ st.markdown(
         background-color: #f8fafc;
     }
     .biz-header {
-        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+        background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%);
         color: #ffffff;
         padding: 1.25rem 1.5rem;
         border-radius: 14px;
         margin-bottom: 1.25rem;
-        box-shadow: 0 4px 16px rgba(15, 23, 42, 0.12);
+        box-shadow: 0 4px 16px rgba(15, 23, 42, 0.14);
     }
     .biz-header h1 {
         margin: 0;
@@ -127,7 +127,7 @@ def api_request(
     *,
     json_body: dict[str, Any] | None = None,
     params: dict[str, Any] | None = None,
-    timeout: float = 20.0,
+    timeout: float = 25.0,
 ) -> tuple[bool, Any]:
     """Execute an HTTP request against the FastAPI backend via httpx."""
     url = f"{API_BASE_URL}{path}"
@@ -171,11 +171,20 @@ def status_badge(status_str: str | None) -> str:
         "responded": "badge-positive",
         "confirmed": "badge-positive",
         "completed": "badge-info",
+        "executed": "badge-positive",
+        "approved": "badge-positive",
+        "ready": "badge-positive",
+        "preparing": "badge-scheduled",
+        "new": "badge-info",
         "scheduled": "badge-scheduled",
         "pending": "badge-neutral",
         "draft": "badge-draft",
         "cancelled": "badge-negative",
+        "rejected": "badge-negative",
         "verified": "badge-positive",
+        "high": "badge-negative",
+        "medium": "badge-neutral",
+        "low": "badge-info",
     }.get(low, "badge-info")
     return f'<span class="badge {cls}">{low}</span>'
 
@@ -194,8 +203,23 @@ def render_header(business: dict[str, Any], subtitle: str) -> None:
     )
 
 
+def render_agent_trace(
+    trace: list[dict[str, Any]], label: str = "🔍 Inspect AI Agent & Tool Steps"
+) -> None:
+    if not trace:
+        return
+    with st.expander(label, expanded=False):
+        for idx, step in enumerate(trace, start=1):
+            st.markdown(
+                f"**{idx}. `{step.get('agent', 'Agent')}`** → "
+                f"`{step.get('tool', 'action')}` "
+                f"({status_badge(step.get('status', 'completed'))}) — {step.get('detail', '')}",
+                unsafe_allow_html=True,
+            )
+
+
 # ---------------------------------------------------------------------------
-# Sidebar: Health, Business Selector, Navigation
+# Sidebar: Health, Business Selector, Pending Approvals Badge, Navigation
 # ---------------------------------------------------------------------------
 
 if "api_overrides" not in st.session_state:
@@ -203,11 +227,11 @@ if "api_overrides" not in st.session_state:
 
 with st.sidebar:
     st.markdown("## 🤖 BizPresence AI")
-    st.caption("Local Business Digital Presence Agent")
+    st.caption("Always-On Agentic Team for Local Shops")
 
     healthy, _health_data = api_request("GET", "/health", timeout=5.0)
     if healthy:
-        st.success("API Connected", icon="🟢")
+        st.success("API + Autopilot Connected", icon="🟢")
     else:
         st.error("API Disconnected", icon="🔴")
 
@@ -217,6 +241,7 @@ with st.sidebar:
     )
 
     selected_business: dict[str, Any] | None = None
+    pending_approvals_cnt = 0
     if businesses:
         biz_labels = {f"{b['name']} ({b['category'].title()})": b for b in businesses}
         chosen_label = st.selectbox(
@@ -225,80 +250,192 @@ with st.sidebar:
             key="selected_business_label",
         )
         selected_business = biz_labels[chosen_label]
-        gbp_badge = "Verified" if selected_business.get("google_business_id") else "Not Configured"
+        gbp_badge = (
+            "Verified ✅" if selected_business.get("google_business_id") else "Not Configured"
+        )
         st.caption(f"Google Profile: **{gbp_badge}**")
+
+        ok_ap, ap_list = api_request(
+            "GET",
+            f"/api/agent/{selected_business['id']}/approvals",
+            params={"status": "pending"},
+        )
+        if ok_ap and isinstance(ap_list, list):
+            pending_approvals_cnt = len(ap_list)
+            if pending_approvals_cnt > 0:
+                st.warning(f"🟡 {pending_approvals_cnt} action(s) awaiting approval")
     else:
-        st.warning("No businesses found. Register one in Settings or run seed_data.py.")
+        st.warning("No businesses yet — launch one in 60 seconds using the Quick Launch Wizard!")
 
     st.divider()
-    page = st.radio(
-        "Navigation",
-        options=[
-            "Dashboard Overview",
-            "Social Media",
-            "Reviews",
-            "Bookings",
-            "AI Assistant",
-            "Settings",
-        ],
-        index=0,
-    )
+    nav_options = [
+        "🏠 Home & Health Score",
+        "✨ 60-Sec Launch Wizard",
+        f"🤖 AI Autopilot & Approvals ({pending_approvals_cnt})"
+        if pending_approvals_cnt
+        else "🤖 AI Autopilot & Approvals",
+        "💬 AI Command Chat",
+        "📣 Social & Campaigns",
+        "⭐ Reviews",
+        "📅 Bookings & Orders",
+        "🌐 Customer Storefront",
+        "⚙️ Settings",
+    ]
+    page = st.radio("Navigation", options=nav_options, index=0)
     st.divider()
     st.caption(f"Backend: `{API_BASE_URL}`")
 
 
-if selected_business is None and page != "Settings":
+if selected_business is None and page not in {"✨ 60-Sec Launch Wizard", "⚙️ Settings"}:
     st.title("Welcome to BizPresence AI")
     st.info(
-        "No businesses are registered yet. Open **Settings** to create your first business "
-        "or run `python scripts/seed_data.py` to load sample data."
+        "No businesses are registered yet. Click **✨ 60-Sec Launch Wizard** in the sidebar "
+        "to launch your shop's digital presence in one click!"
     )
     st.stop()
 
 
 # ---------------------------------------------------------------------------
-# PAGE 1: Dashboard Overview
+# PAGE: ✨ 60-Sec Launch Wizard
 # ---------------------------------------------------------------------------
 
-if page == "Dashboard Overview" and selected_business:
+if page == "✨ 60-Sec Launch Wizard":
+    st.markdown(
+        """
+        <div class="biz-header">
+            <h1>✨ 60-Second Digital Launch Wizard</h1>
+            <p>No tech skills needed. Enter your shop basics and our AI agents build your Google Profile, SEO bio, menu/catalog, and starter social posts automatically.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.form("magic_onboard_form"):
+        c1, c2 = st.columns(2)
+        m_name = c1.text_input("Shop / Business Name*", placeholder="e.g., Chai Junction")
+        m_cat = c2.selectbox(
+            "Business Type*",
+            ["restaurant", "cafe", "bakery", "salon", "retail", "fitness", "medical", "general"],
+        )
+        m_city = c1.text_input("City", placeholder="e.g., Pune")
+        m_state = c2.text_input("State", placeholder="e.g., Maharashtra")
+        m_addr = c1.text_input("Street Address", placeholder="e.g., 24 FC Road")
+        m_phone = c2.text_input("Phone / WhatsApp", placeholder="e.g., +91 98765 43210")
+        m_email = c1.text_input("Email", placeholder="hello@chaijunction.com")
+        m_lang = c2.selectbox(
+            "Preferred AI Language",
+            ["English", "Hindi", "Hinglish", "Spanish", "French"],
+        )
+        m_spec = st.text_input(
+            "What is your shop famous for?",
+            placeholder="e.g., Masala chai, bun maska, and fresh evening snacks",
+        )
+        auto_posts = st.checkbox(
+            "Auto-create 3 starter social media posts (Google, Instagram, Facebook)",
+            value=True,
+        )
+
+        if st.form_submit_button(
+            "🚀 Launch My Digital Presence Now", type="primary", use_container_width=True
+        ):
+            if not m_name.strip():
+                st.warning("Please enter your shop or business name.")
+            else:
+                with st.spinner("AI agents are building your profile, catalog, and posts..."):
+                    ok_m, res_m = api_request(
+                        "POST",
+                        "/api/agent/magic-onboard",
+                        json_body={
+                            "name": m_name.strip(),
+                            "category": m_cat,
+                            "city": m_city.strip(),
+                            "state": m_state.strip(),
+                            "address": m_addr.strip(),
+                            "phone": m_phone.strip(),
+                            "email": m_email.strip(),
+                            "preferred_language": m_lang,
+                            "specialty": m_spec.strip(),
+                            "auto_schedule_starter_posts": auto_posts,
+                        },
+                    )
+                if ok_m:
+                    st.success(res_m["summary"])
+                    k1, k2, k3 = st.columns(3)
+                    k1.metric("Health Score", f"{res_m['health_score']}/100")
+                    k2.metric("Starter Posts Created", res_m["starter_posts_created"])
+                    k3.metric("Catalog Items Seeded", res_m["catalog_items_created"])
+                    render_agent_trace(
+                        res_m.get("agent_trace", []), "🔍 See What the AI Team Just Built"
+                    )
+                    st.info(
+                        f"Your live customer booking & ordering page is ready at: "
+                        f"`{API_BASE_URL}/site/{res_m['business']['id']}`"
+                    )
+                else:
+                    st.error(res_m)
+
+
+# ---------------------------------------------------------------------------
+# PAGE 1: Home & Health Score
+# ---------------------------------------------------------------------------
+
+elif page == "🏠 Home & Health Score" and selected_business:
     biz_id = selected_business["id"]
-    render_header(selected_business, "Digital Presence Overview")
+    render_header(selected_business, "Digital Presence Overview & Health Score")
 
     ok, overview = api_request("GET", f"/api/businesses/{biz_id}/dashboard")
+    ok_hs, health = api_request("GET", f"/api/agent/{biz_id}/health-score")
     if not ok:
         st.error(overview)
         st.stop()
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
+        hs_val = f"{health['overall_score']}/100 ({health['grade']})" if ok_hs else "—"
+        st.metric("Presence Health", hs_val)
+    with c2:
         st.metric(
             "Total Reviews",
             overview["total_reviews"],
-            delta=f"{overview['pending_reviews']} pending reply",
+            delta=f"{overview['pending_reviews']} pending",
             delta_color="inverse" if overview["pending_reviews"] > 0 else "normal",
         )
-    with c2:
+    with c3:
         st.metric(
             "Average Rating",
             f"{overview['average_rating']:.2f} ★",
             delta=f"GBP: {overview['google_profile_status']}",
         )
-    with c3:
+    with c4:
         st.metric(
             "Posts This Week",
             overview["posts_this_week"],
             delta=f"{overview['scheduled_posts']} scheduled",
         )
-    with c4:
+    with c5:
         st.metric(
             "Upcoming Bookings",
             overview["upcoming_bookings"],
             delta=f"{overview['bookings_today']} today",
         )
 
-    st.markdown("")
-    left_col, right_col = st.columns([1.4, 1.0])
+    if ok_hs:
+        with st.expander(
+            f"📊 Health Score Breakdown — Top Tip: {health['top_recommendation']}", expanded=True
+        ):
+            p_cols = st.columns(len(health["pillars"]))
+            for col, p in zip(p_cols, health["pillars"], strict=True):
+                with col:
+                    st.markdown(f"**{p['name']}**")
+                    st.progress(p["score"] / p["max_score"])
+                    st.caption(f"{p['score']}/{p['max_score']} pts — {p['tip']}")
 
+    st.info(
+        f"🌐 **Shareable Customer Booking & Order Link:** "
+        f"[{API_BASE_URL}/site/{biz_id}]({API_BASE_URL}/site/{biz_id})"
+    )
+
+    left_col, right_col = st.columns([1.35, 1.0])
     with left_col:
         st.subheader("📋 Recent Activity Feed")
         activities = overview.get("recent_activity", [])
@@ -327,15 +464,13 @@ if page == "Dashboard Overview" and selected_business:
                 )
 
     with right_col:
-        st.subheader("💡 AI Priority Suggestions")
+        st.subheader("💡 One-Click AI Priority Fixes")
         ok_sug, sug_data = api_request("GET", f"/api/agent/{biz_id}/suggestions")
         if ok_sug and sug_data.get("suggestions"):
             for sug in sug_data["suggestions"]:
-                prio_color = {
-                    "high": "#dc2626",
-                    "medium": "#d97706",
-                    "low": "#2563eb",
-                }.get(sug["priority"], "#475569")
+                prio_color = {"high": "#dc2626", "medium": "#d97706", "low": "#2563eb"}.get(
+                    sug["priority"], "#475569"
+                )
                 st.markdown(
                     f"""
                     <div class="suggestion-card">
@@ -368,6 +503,7 @@ if page == "Dashboard Overview" and selected_business:
                     )
                     if ok_run:
                         st.success(run_res["reply"])
+                        render_agent_trace(run_res.get("agent_trace", []))
                     else:
                         st.error(run_res)
         else:
@@ -375,15 +511,287 @@ if page == "Dashboard Overview" and selected_business:
 
 
 # ---------------------------------------------------------------------------
-# PAGE 2: Social Media
+# PAGE 2: AI Autopilot & Approvals (Human-in-the-Loop)
 # ---------------------------------------------------------------------------
 
-elif page == "Social Media" and selected_business:
+elif page.startswith("🤖 AI Autopilot & Approvals") and selected_business:
     biz_id = selected_business["id"]
-    render_header(selected_business, "Social Media Studio & Content Calendar")
+    render_header(selected_business, "Human-in-the-Loop Approval Inbox & Autonomous Autopilot")
 
-    tab_compose, tab_calendar, tab_history = st.tabs(
-        ["✍️ Post Composer", "🗓️ Content Calendar", "📊 Post History & Engagement"]
+    tab_inbox, tab_rules, tab_logs = st.tabs(
+        ["📥 Approval Inbox", "⚙️ Autopilot Rules", "🛰️ Agent Reasoning Logs"]
+    )
+
+    with tab_inbox:
+        ap_filter = st.selectbox(
+            "Filter Approvals", ["pending", "executed", "rejected", "All"], index=0
+        )
+        ap_params = {} if ap_filter == "All" else {"status": ap_filter}
+        ok_ap, approvals = api_request("GET", f"/api/agent/{biz_id}/approvals", params=ap_params)
+        if not ok_ap:
+            st.error(approvals)
+        elif not approvals:
+            st.success("🎉 Approval Inbox is clear! No pending actions waiting for your review.")
+        else:
+            for item in approvals:
+                st.markdown(
+                    f"""
+                    <div class="metric-card" style="margin-bottom:0.5rem;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <strong>{item["title"]}</strong>
+                            <div>
+                                {status_badge(item["risk_level"])}
+                                {status_badge(item["status"])}
+                            </div>
+                        </div>
+                        <div style="color:#475569; font-size:0.86rem; margin:0.35rem 0;">
+                            <strong>Agent:</strong> <code>{item["agent_name"]}</code> •
+                            <strong>Why:</strong> {item["reasoning"]}
+                        </div>
+                        <div style="color:#64748b; font-size:0.84rem;">
+                            <em>Context:</em> {item["description"]}
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                payload = item.get("payload") or {}
+                draft_text = payload.get("response_text") or payload.get("content") or ""
+                if item["status"] == "pending":
+                    edited = st.text_area(
+                        "Edit AI draft before publishing (optional)",
+                        value=draft_text,
+                        key=f"hitl_edit_{item['id']}",
+                        height=90,
+                    )
+                    b1, b2 = st.columns(2)
+                    if b1.button(
+                        "✅ Approve & Execute",
+                        key=f"hitl_approve_{item['id']}",
+                        type="primary",
+                        use_container_width=True,
+                    ):
+                        ok_d, res_d = api_request(
+                            "POST",
+                            f"/api/agent/{biz_id}/approvals/{item['id']}/decide",
+                            json_body={"decision": "approve", "edited_content": edited},
+                        )
+                        if ok_d:
+                            st.success("Approved and executed!")
+                            st.rerun()
+                        else:
+                            st.error(res_d)
+                    if b2.button(
+                        "✖️ Reject",
+                        key=f"hitl_reject_{item['id']}",
+                        use_container_width=True,
+                    ):
+                        ok_d, res_d = api_request(
+                            "POST",
+                            f"/api/agent/{biz_id}/approvals/{item['id']}/decide",
+                            json_body={"decision": "reject"},
+                        )
+                        if ok_d:
+                            st.info("Rejected action.")
+                            st.rerun()
+                        else:
+                            st.error(res_d)
+                else:
+                    if draft_text:
+                        st.caption(f"Content: {draft_text}")
+                st.divider()
+
+    with tab_rules:
+        ok_cfg, cfg = api_request("GET", f"/api/agent/{biz_id}/autopilot")
+        if not ok_cfg:
+            st.error(cfg)
+        else:
+            col_form, col_run = st.columns([1.4, 1.0])
+            with col_form, st.form("autopilot_rules_form"):
+                ap_enabled = st.toggle(
+                    "Enable Background Autopilot (runs every 5 mins)",
+                    value=cfg["autopilot_enabled"],
+                )
+                auto_pub = st.toggle(
+                    "Auto-publish scheduled posts when due", value=cfg["auto_publish_scheduled"]
+                )
+                auto_pos = st.toggle(
+                    "Auto-reply to positive (4-5★) reviews automatically",
+                    value=cfg["auto_reply_positive_reviews"],
+                )
+                hold_neg = st.toggle(
+                    "Safety Guardrail: Hold ≤2★ reviews for Human Approval",
+                    value=cfg["require_approval_negative_reviews"],
+                )
+                lang = st.selectbox(
+                    "Preferred AI Language",
+                    ["English", "Hindi", "Hinglish", "Spanish", "French"],
+                    index=["English", "Hindi", "Hinglish", "Spanish", "French"].index(
+                        cfg["preferred_language"]
+                    )
+                    if cfg["preferred_language"]
+                    in ["English", "Hindi", "Hinglish", "Spanish", "French"]
+                    else 0,
+                )
+                voice = st.text_input("Brand Voice", value=cfg["brand_voice"])
+                if st.form_submit_button("Save Autopilot Rules", type="primary"):
+                    ok_u, res_u = api_request(
+                        "PUT",
+                        f"/api/agent/{biz_id}/autopilot",
+                        json_body={
+                            "autopilot_enabled": ap_enabled,
+                            "auto_publish_scheduled": auto_pub,
+                            "auto_reply_positive_reviews": auto_pos,
+                            "require_approval_negative_reviews": hold_neg,
+                            "preferred_language": lang,
+                            "brand_voice": voice,
+                        },
+                    )
+                    if ok_u:
+                        st.success("Autopilot rules saved!")
+                    else:
+                        st.error(res_u)
+
+            with col_run:
+                st.subheader("⚡ Run Autonomous Cycle Now")
+                st.caption(
+                    "Publishes any due scheduled posts and scans pending reviews to draft "
+                    "HITL approvals or auto-reply per your rules."
+                )
+                if st.button(
+                    "🤖 Trigger Autopilot Cycle", type="primary", use_container_width=True
+                ):
+                    ok_r, res_r = api_request("POST", f"/api/agent/{biz_id}/autopilot/run")
+                    if ok_r:
+                        st.success(
+                            f"Done! Published: {res_r.get('published_posts', 0)} • "
+                            f"Auto-replied: {res_r.get('auto_replied_reviews', 0)} • "
+                            f"Queued for approval: {res_r.get('queued_approvals', 0)}"
+                        )
+                        render_agent_trace(res_r.get("trace", []))
+                    else:
+                        st.error(res_r)
+
+    with tab_logs:
+        ok_logs, logs = api_request("GET", f"/api/agent/{biz_id}/logs")
+        if not ok_logs:
+            st.error(logs)
+        elif not logs:
+            st.info("No agent execution logs yet. Chat with the AI or trigger Autopilot!")
+        else:
+            for lg in logs:
+                st.markdown(
+                    f"**#{lg['id']} [{lg['trigger_source']}]** `{lg['outcome']}` "
+                    f"({lg['duration_ms']}ms) — *{lg['goal']}*"
+                )
+                st.caption(
+                    f"Agents: {', '.join(lg['agents_invoked'])} | Tools: {', '.join(lg['tools_called'])}"
+                )
+                render_agent_trace(lg.get("steps_summary", []), "View step trace")
+
+
+# ---------------------------------------------------------------------------
+# PAGE 3: AI Command Chat (Multi-Turn Memory + LangGraph Trace + Copilot/Autopilot)
+# ---------------------------------------------------------------------------
+
+elif page == "💬 AI Command Chat" and selected_business:
+    biz_id = selected_business["id"]
+    render_header(selected_business, "LangGraph Multi-Agent Command Center")
+
+    session_id = f"biz_{biz_id}"
+    c_top1, c_top2, c_top3 = st.columns([1.2, 1.5, 0.8])
+    chat_lang = c_top1.selectbox(
+        "Reply Language", ["English", "Hindi", "Hinglish", "Spanish"], index=0
+    )
+    auto_exec = c_top2.toggle(
+        "Autopilot Execution (Off = Copilot queues actions in Approval Inbox)",
+        value=True,
+    )
+    if c_top3.button("🗑️ Clear History", use_container_width=True):
+        api_request("DELETE", f"/api/agent/{biz_id}/history", params={"session_id": session_id})
+        st.rerun()
+
+    st.caption("One-Click Multi-Agent Prompts:")
+    qp1, qp2, qp3, qp4 = st.columns(4)
+    quick_prompts = [
+        (
+            qp1,
+            "📊 Full Health Audit",
+            "Give me a full analytics summary and check my Google insights",
+        ),
+        (
+            qp2,
+            "📸 Post + Bookings",
+            "Create an Instagram post about our weekend special and show today's bookings",
+        ),
+        (qp3, "⭐ Draft Review Replies", "Draft responses for all pending reviews"),
+        (qp4, "🛒 Check Active Orders", "Show active online orders and open booking slots"),
+    ]
+    triggered_prompt: str | None = None
+    for col, label, prompt_text in quick_prompts:
+        if col.button(label, use_container_width=True):
+            triggered_prompt = prompt_text
+
+    ok_hist, history = api_request(
+        "GET", f"/api/agent/{biz_id}/history", params={"session_id": session_id}
+    )
+    messages = history if ok_hist and isinstance(history, list) else []
+
+    if not messages:
+        with st.chat_message("assistant"):
+            st.markdown(
+                f"Hi! I'm **BizPresence AI** for **{selected_business['name']}**. "
+                "I remember our conversation and coordinate specialized Google Business, Social, "
+                "Review, Booking, Order, and Analytics agents—even for compound multi-step requests!"
+            )
+
+    for msg in messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if msg["role"] == "assistant" and msg.get("agent_trace"):
+                render_agent_trace(msg["agent_trace"])
+
+    user_input = st.chat_input(f"Ask BizPresence AI about {selected_business['name']}...")
+    prompt_to_send = triggered_prompt or user_input
+
+    if prompt_to_send:
+        with st.chat_message("user"):
+            st.markdown(prompt_to_send)
+
+        with st.chat_message("assistant"):
+            with st.spinner("Supervisor planning & running specialist agents..."):
+                ok_chat, chat_res = api_request(
+                    "POST",
+                    f"/api/agent/{biz_id}/chat",
+                    json_body={
+                        "message": prompt_to_send,
+                        "auto_execute": auto_exec,
+                        "session_id": session_id,
+                        "language": chat_lang,
+                        "context": st.session_state["api_overrides"],
+                    },
+                )
+            if ok_chat:
+                st.markdown(chat_res["reply"])
+                if chat_res.get("queued_approvals"):
+                    st.warning(
+                        f"🟡 {len(chat_res['queued_approvals'])} action(s) queued in **AI Autopilot & Approvals**."
+                    )
+                render_agent_trace(chat_res.get("agent_trace", []))
+            else:
+                st.error(chat_res)
+
+
+# ---------------------------------------------------------------------------
+# PAGE 4: Social Media & Campaigns
+# ---------------------------------------------------------------------------
+
+elif page == "📣 Social & Campaigns" and selected_business:
+    biz_id = selected_business["id"]
+    render_header(selected_business, "Social Media Studio, Campaigns & Calendar")
+
+    tab_compose, tab_campaign, tab_calendar, tab_history = st.tabs(
+        ["✍️ Post Composer", "🚀 1-Click Campaign Launcher", "🗓️ Content Calendar", "📊 Post History"]
     )
 
     with tab_compose:
@@ -443,8 +851,7 @@ elif page == "Social Media" and selected_business:
                 placeholder="Write your post or click AI Assist above...",
             )
             image_url = st.text_input(
-                "Image URL (optional)",
-                placeholder="https://example.com/photo.jpg",
+                "Image URL (optional)", placeholder="https://example.com/photo.jpg"
             )
 
             publish_mode = st.radio(
@@ -515,6 +922,49 @@ elif page == "Social Media" and selected_business:
                 st.info(f"⏰ Recommended time: **{st.session_state['draft_best_time']}**")
             if st.session_state.get("draft_image_prompt"):
                 st.caption(f"🎨 Visual prompt: {st.session_state['draft_image_prompt']}")
+
+    with tab_campaign:
+        st.subheader("🚀 Launch a Multi-Platform Campaign in One Click")
+        with st.form("campaign_form"):
+            cc1, cc2 = st.columns(2)
+            occ = cc1.text_input(
+                "Occasion / Theme*", placeholder="e.g., Diwali Weekend Sale or Summer Happy Hour"
+            )
+            off = cc2.text_input("Offer Details", placeholder="e.g., 15% off all family combos")
+            plats = st.multiselect(
+                "Target Channels",
+                ["instagram", "facebook", "google", "twitter"],
+                default=["instagram", "facebook", "google"],
+            )
+            auto_sched = st.toggle(
+                "Schedule immediately (Off = send to Approval Inbox first)",
+                value=False,
+            )
+            if st.form_submit_button("⚡ Generate Campaign", type="primary"):
+                if not occ.strip() or not plats:
+                    st.warning("Enter an occasion and choose at least one platform.")
+                else:
+                    ok_c, res_c = api_request(
+                        "POST",
+                        f"/api/agent/{biz_id}/campaign",
+                        json_body={
+                            "occasion": occ.strip(),
+                            "offer_details": off.strip(),
+                            "platforms": plats,
+                            "auto_execute": auto_sched,
+                        },
+                    )
+                    if ok_c:
+                        st.success(
+                            f"Campaign '{res_c['occasion']}' ready! "
+                            f"Scheduled: {res_c['posts_created']} • Queued for Approval: {res_c['approvals_queued']}"
+                        )
+                        for asset in res_c["assets"]:
+                            st.markdown(f"**{asset['platform'].title()}** (`{asset['status']}`):")
+                            st.info(asset["content"])
+                        render_agent_trace(res_c.get("agent_trace", []))
+                    else:
+                        st.error(res_c)
 
     with tab_calendar:
         cal_days = st.slider("Calendar Window (days)", min_value=7, max_value=30, value=14)
@@ -597,10 +1047,10 @@ elif page == "Social Media" and selected_business:
 
 
 # ---------------------------------------------------------------------------
-# PAGE 3: Reviews
+# PAGE 5: Reviews
 # ---------------------------------------------------------------------------
 
-elif page == "Reviews" and selected_business:
+elif page == "⭐ Reviews" and selected_business:
     biz_id = selected_business["id"]
     render_header(selected_business, "Customer Reviews & Reputation Management")
 
@@ -750,38 +1200,39 @@ elif page == "Reviews" and selected_business:
 
 
 # ---------------------------------------------------------------------------
-# PAGE 4: Bookings
+# PAGE 6: Bookings & Online Orders
 # ---------------------------------------------------------------------------
 
-elif page == "Bookings" and selected_business:
+elif page == "📅 Bookings & Orders" and selected_business:
     biz_id = selected_business["id"]
-    render_header(selected_business, "Bookings, Calendar & Availability")
+    render_header(selected_business, "Bookings, Availability & Online Customer Orders")
 
     ok_bk, bookings = api_request("GET", f"/api/bookings/{biz_id}/bookings")
     bookings_list = bookings if ok_bk and isinstance(bookings, list) else []
+    ok_ord, orders = api_request("GET", f"/api/orders/{biz_id}/orders")
+    orders_list = orders if ok_ord and isinstance(orders, list) else []
 
     today = date.today()
-    week_end = today + timedelta(days=7)
     today_count = sum(
         1
         for b in bookings_list
         if b["booking_date"] == today.isoformat() and b["status"] != "cancelled"
     )
-    week_count = sum(
-        1
-        for b in bookings_list
-        if today.isoformat() <= b["booking_date"] <= week_end.isoformat()
-        and b["status"] != "cancelled"
-    )
     confirmed_count = sum(1 for b in bookings_list if b["status"] == "confirmed")
+    active_orders = sum(1 for o in orders_list if o["status"] not in {"completed", "cancelled"})
 
     b1, b2, b3 = st.columns(3)
     b1.metric("Bookings Today", today_count)
-    b2.metric("Next 7 Days", week_count)
-    b3.metric("Total Confirmed", confirmed_count)
+    b2.metric("Total Confirmed Bookings", confirmed_count)
+    b3.metric("Active Online Orders", active_orders)
 
-    tab_cal, tab_new, tab_avail = st.tabs(
-        ["📅 Bookings Schedule", "➕ New Booking", "🕒 Check Availability"]
+    tab_cal, tab_new, tab_avail, tab_orders = st.tabs(
+        [
+            "📅 Bookings Schedule",
+            "➕ New Booking",
+            "🕒 Check Availability",
+            "🛒 Online Orders Queue",
+        ]
     )
 
     with tab_cal:
@@ -891,90 +1342,107 @@ elif page == "Bookings" and selected_business:
                     else:
                         st.error(f"⛔ {slot['start_time']} - {slot['end_time']}")
 
-
-# ---------------------------------------------------------------------------
-# PAGE 5: AI Assistant
-# ---------------------------------------------------------------------------
-
-elif page == "AI Assistant" and selected_business:
-    biz_id = selected_business["id"]
-    render_header(selected_business, "BizPresence AI Orchestrator")
-
-    chat_key = f"chat_history_{biz_id}"
-    if chat_key not in st.session_state:
-        st.session_state[chat_key] = [
-            {
-                "role": "assistant",
-                "content": (
-                    f"Hi! I'm **BizPresence AI**, your digital presence assistant for "
-                    f"**{selected_business['name']}**. Ask me to create social posts, draft or "
-                    "auto-respond to reviews, check bookings, or summarize your performance."
-                ),
-            }
-        ]
-
-    st.caption("Quick Prompts:")
-    qp1, qp2, qp3, qp4 = st.columns(4)
-    quick_prompts = [
-        (qp1, "📊 Performance Summary", "Give me a summary of our performance"),
-        (
-            qp2,
-            "📸 Create Instagram Post",
-            "Create and schedule an Instagram post about our weekend special",
-        ),
-        (qp3, "⭐ Draft Review Replies", "Draft responses for all pending reviews"),
-        (qp4, "📅 Today's Bookings", "Show upcoming bookings and today's open slots"),
-    ]
-    triggered_prompt: str | None = None
-    for col, label, prompt_text in quick_prompts:
-        if col.button(label, use_container_width=True):
-            triggered_prompt = prompt_text
-
-    auto_exec = st.toggle(
-        "Allow AI to execute actions automatically (create posts / send replies)",
-        value=True,
-    )
-
-    for msg in st.session_state[chat_key]:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
-    user_input = st.chat_input(f"Ask BizPresence AI about {selected_business['name']}...")
-    prompt_to_send = triggered_prompt or user_input
-
-    if prompt_to_send:
-        st.session_state[chat_key].append({"role": "user", "content": prompt_to_send})
-        with st.chat_message("user"):
-            st.markdown(prompt_to_send)
-
-        with st.chat_message("assistant"):
-            with st.spinner("BizPresence AI is thinking..."):
-                ok_chat, chat_res = api_request(
-                    "POST",
-                    f"/api/agent/{biz_id}/chat",
-                    json_body={
-                        "message": prompt_to_send,
-                        "auto_execute": auto_exec,
-                        "context": st.session_state["api_overrides"],
-                    },
-                )
-            if ok_chat:
-                reply_text = chat_res["reply"]
-                if chat_res.get("actions_taken"):
-                    reply_text += "\n\n**Actions Executed:** " + ", ".join(
-                        chat_res["actions_taken"]
+    with tab_orders:
+        if not orders_list:
+            st.info(
+                f"No online orders yet. Share your public storefront link `{API_BASE_URL}/site/{biz_id}` "
+                "so customers can order directly!"
+            )
+        else:
+            for o in orders_list:
+                items_str = ", ".join(f"{it['quantity']}× {it['name']}" for it in o["items"])
+                oc1, oc2, oc3 = st.columns([2.2, 1.0, 1.3])
+                with oc1:
+                    st.markdown(
+                        f"**Order #{o['id']} — {o['customer_name']}** ({o['customer_phone']}) • "
+                        f"**${o['total_amount']:.2f}** (`{o['fulfillment_type']}`)"
                     )
-                st.markdown(reply_text)
-                st.session_state[chat_key].append({"role": "assistant", "content": reply_text})
-            else:
-                st.error(chat_res)
+                    st.caption(
+                        f"Items: {items_str}" + (f" | Note: {o['notes']}" if o.get("notes") else "")
+                    )
+                with oc2:
+                    st.markdown(status_badge(o["status"]), unsafe_allow_html=True)
+                with oc3:
+                    next_opts = ["confirmed", "preparing", "ready", "completed", "cancelled"]
+                    new_stat = st.selectbox(
+                        "Update",
+                        next_opts,
+                        index=next_opts.index(o["status"]) if o["status"] in next_opts else 0,
+                        key=f"ord_stat_{o['id']}",
+                        label_visibility="collapsed",
+                    )
+                    if new_stat != o["status"] and st.button("Save", key=f"ord_save_{o['id']}"):
+                        ok_u, res_u = api_request(
+                            "PUT",
+                            f"/api/orders/{biz_id}/orders/{o['id']}",
+                            json_body={"status": new_stat},
+                        )
+                        if ok_u:
+                            st.rerun()
+                        else:
+                            st.error(res_u)
+                st.divider()
 
 
 # ---------------------------------------------------------------------------
-# PAGE 6: Settings
+# PAGE 7: Customer Storefront & Catalog
 # ---------------------------------------------------------------------------
 
-elif page == "Settings":
+elif page == "🌐 Customer Storefront" and selected_business:
+    biz_id = selected_business["id"]
+    render_header(selected_business, "Public Customer Storefront & Menu / Services Catalog")
+
+    store_url = f"{API_BASE_URL}/site/{biz_id}"
+    st.success(f"🌐 **Your Live Customer Booking & Order Page:** [{store_url}]({store_url})")
+    st.caption("Share this link on WhatsApp, Instagram Bio, or your Google Business Profile.")
+
+    ok_cfg, cfg = api_request("GET", f"/api/agent/{biz_id}/autopilot")
+    if ok_cfg:
+        st.subheader("🛍️ Menu & Services Shown on Your Public Page")
+        items = list(cfg.get("catalog_items") or [])
+        for it in items:
+            st.markdown(
+                f"- **{it.get('name')}** — `${float(it.get('price', 0)):.2f}` ({it.get('description', '')})"
+            )
+
+        with st.form("add_catalog_item_form"):
+            st.markdown("**➕ Add a New Service or Product**")
+            ac1, ac2 = st.columns([2, 1])
+            it_name = ac1.text_input(
+                "Item / Service Name*", placeholder="e.g., Truffle Pizza or Express Haircut"
+            )
+            it_price = ac2.number_input("Price ($)", min_value=0.0, value=20.0, step=1.0)
+            it_desc = st.text_input(
+                "Short Description", placeholder="Freshly prepared / 30-min session"
+            )
+            if st.form_submit_button("Add to Storefront", type="primary"):
+                if not it_name.strip():
+                    st.warning("Item name is required.")
+                else:
+                    items.append(
+                        {
+                            "name": it_name.strip(),
+                            "price": float(it_price),
+                            "description": it_desc.strip(),
+                        }
+                    )
+                    ok_u, res_u = api_request(
+                        "PUT",
+                        f"/api/agent/{biz_id}/autopilot",
+                        json_body={"catalog_items": items},
+                    )
+                    if ok_u:
+                        st.success("Added to your public storefront!")
+                        st.rerun()
+                    else:
+                        st.error(res_u)
+
+
+# ---------------------------------------------------------------------------
+# PAGE 8: Settings
+# ---------------------------------------------------------------------------
+
+elif page == "⚙️ Settings":
     if selected_business:
         render_header(selected_business, "Business Profile, Google Setup & API Keys")
     else:
@@ -1087,7 +1555,7 @@ elif page == "Settings":
     with tabs[2]:
         overrides = st.session_state["api_overrides"]
         with st.form("api_keys_form"):
-            st.caption("Session-scoped LLM API keys forwarded to the AI Orchestrator.")
+            st.caption("Session-scoped LLM API keys forwarded to the LangGraph Supervisor.")
             gem_key = st.text_input(
                 "Google Gemini API Key (optional)",
                 value=overrides.get("gemini_api_key", ""),

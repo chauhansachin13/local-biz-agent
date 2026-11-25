@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -12,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from config.settings import settings
+from src.agents.scheduler import start_autopilot_scheduler, stop_autopilot_scheduler
 from src.api.routes import api_router
 from src.database import init_db
 from src.utils.logger import get_logger
@@ -21,10 +23,15 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Initialize database tables on application startup."""
+    """Initialize database tables and background autopilot scheduler on startup."""
     logger.info("Starting %s and initializing database tables...", settings.app_name)
     await init_db()
-    yield
+    if os.getenv("ENVIRONMENT", "").lower() != "test":
+        start_autopilot_scheduler()
+    try:
+        yield
+    finally:
+        stop_autopilot_scheduler()
 
 
 app = FastAPI(
@@ -110,7 +117,9 @@ async def root() -> dict:
             "social": "/api/social",
             "reviews": "/api/reviews",
             "bookings": "/api/bookings",
+            "orders": "/api/orders",
             "agent": "/api/agent",
+            "storefront": "/site/{business_id}",
         },
     }
 

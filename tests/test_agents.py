@@ -6,9 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.agents.booking_agent import BookingAgent
+from src.agents.health_and_growth import compute_health_score
 from src.agents.orchestrator import BizPresenceOrchestrator
 from src.agents.review_agent import ReviewAgent
 from src.agents.social_agent import SocialMediaAgent
+from src.agents.supervisor import _detect_intents_offline
 from src.models.review import Sentiment
 from src.tools.analytics_tools import aggregate_platform_metrics
 from src.tools.content_tools import generate_post_ideas, generate_promotional_offer
@@ -104,7 +106,7 @@ def test_aggregate_platform_metrics_tool() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Agent Tests
+# Agent & Supervisor Tests
 # ---------------------------------------------------------------------------
 
 
@@ -184,12 +186,30 @@ async def test_booking_agent_day_hours_and_closed(db_session, sample_business) -
         "tuesday": {"open": "09:00", "close": "12:00", "closed": True},
     }
     today = date.today()
-    # Find next Tuesday
     days_until_tue = (1 - today.weekday()) % 7
     next_tue = today + timedelta(days=days_until_tue)
     avail = await agent.get_availability(db_session, sample_business, next_tue)
     assert avail["is_open"] is False
     assert avail["available_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_compute_health_score(db_session, sample_business, sample_review) -> None:
+    """Verify Digital Presence Health Score returns 0-100 across 5 pillars."""
+    score = await compute_health_score(db_session, sample_business)
+    assert 0 <= score["overall_score"] <= 100
+    assert len(score["pillars"]) == 5
+    assert score["grade"] in {"A+", "A", "B", "C", "D"}
+
+
+def test_supervisor_multi_intent_decomposition() -> None:
+    """Verify offline planner decomposes compound prompts into ordered tasks."""
+    plan = _detect_intents_offline(
+        "create an instagram post about chai and check pending reviews and today's bookings"
+    )
+    assert "social_create" in plan
+    assert "review_respond" in plan
+    assert "booking_manage" in plan
 
 
 # ---------------------------------------------------------------------------

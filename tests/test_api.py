@@ -20,6 +20,7 @@ async def test_root_endpoint(test_client: AsyncClient) -> None:
     data = response.json()
     assert data["name"] == "BizPresence AI"
     assert data["status"] == "healthy"
+    assert "storefront" in data["endpoints"]
 
 
 async def test_health_check(test_client: AsyncClient) -> None:
@@ -143,7 +144,7 @@ async def test_reviews_respond_auto_respond_and_analytics(
     sample_business: Business,
     sample_review: Review,
 ) -> None:
-    """Verify review listing, AI reply, auto-respond, and review analytics."""
+    """Verify review listing, AI reply, and review analytics."""
     list_resp = await test_client.get(f"/api/reviews/{sample_business.id}/reviews")
     assert list_resp.status_code == 200
     reviews = list_resp.json()
@@ -176,7 +177,6 @@ async def test_bookings_create_conflict_cancel_and_availability(
     assert list_resp.status_code == 200
     assert len(list_resp.json()) == 1
 
-    # Overlapping slot should return 409 Conflict (Bakery has capacity 1)
     conflict_resp = await test_client.post(
         f"/api/bookings/{sample_business.id}/book",
         json={
@@ -191,7 +191,6 @@ async def test_bookings_create_conflict_cancel_and_availability(
     )
     assert conflict_resp.status_code == 409
 
-    # Open date/time should succeed with 201 Created
     open_date = (date.today() + timedelta(days=3)).isoformat()
     create_resp = await test_client.post(
         f"/api/bookings/{sample_business.id}/book",
@@ -222,27 +221,124 @@ async def test_bookings_create_conflict_cancel_and_availability(
     assert avail_resp.json()["available_count"] > 0
 
 
-async def test_agent_chat_and_suggestions(
+async def test_orders_and_public_storefront(
+    test_client: AsyncClient,
+    sample_business: Business,
+) -> None:
+    """Verify online order lifecycle and customer-facing HTML storefront."""
+    order_resp = await test_client.post(
+        f"/api/orders/{sample_business.id}/order",
+        json={
+            "customer_name": "Priya Verma",
+            "customer_phone": "+91 98765 43210",
+            "fulfillment_type": "pickup",
+            "items": [{"name": "Sourdough Loaf", "quantity": 2, "price": 9.5}],
+        },
+    )
+    assert order_resp.status_code == 201
+    order_data = order_resp.json()
+    assert order_data["total_amount"] == 19.0
+    assert order_data["status"] == "new"
+
+    list_resp = await test_client.get(f"/api/orders/{sample_business.id}/orders")
+    assert list_resp.status_code == 200
+    assert len(list_resp.json()) == 1
+
+    upd_resp = await test_client.put(
+        f"/api/orders/{sample_business.id}/orders/{order_data['id']}",
+        json={"status": "ready"},
+    )
+    assert upd_resp.status_code == 200
+    assert upd_resp.json()["status"] == "ready"
+
+    site_resp = await test_client.get(f"/site/{sample_business.id}")
+    assert site_resp.status_code == 200
+    assert sample_business.name in site_resp.text
+    assert "Place an Online Order" in site_resp.text
+
+
+async def test_agent_langgraph_chat_memory_hitl_and_logs(
     test_client: AsyncClient,
     sample_business: Business,
     sample_review: Review,
 ) -> None:
-    """Verify POST /api/agent/{id}/chat across intents and GET /suggestions."""
-    social_resp = await test_client.post(
+    """Verify LangGraph multi-step chat, memory persistence, HITL approvals, and run logs."""
+    # Compound request in Copilot mode (auto_execute=False) -> plans 2 tasks + queues approval
+    chat_resp = await test_client.post(
         f"/api/agent/{sample_business.id}/chat",
-        json={"message": "Create an Instagram post for our weekend special"},
+        json={
+            "message": "Create an Instagram post about our weekend special and show today's bookings",
+            "auto_execute": False,
+            "session_id": "test_sess",
+        },
     )
-    assert social_resp.status_code == 200
-    assert social_resp.json()["intent"] == "social_create"
-    assert len(social_resp.json()["reply"]) > 0
+    assert chat_resp.status_code == 200
+    cdata = chat_resp.json()
+    assert len(cdata["plan"]) >= 2
+    assert len(cdata["agent_trace"]) >= 3
+    assert len(cdata["queued_approvals"]) == 1
+    assert cdata["health_score"] is not None
 
-    review_resp = await test_client.post(
-        f"/api/agent/{sample_business.id}/chat",
-        json={"message": "Draft replies for pending reviews", "auto_execute": False},
+    # Persistent memory check
+    hist_resp = await test_client.get(
+        f"/api/agent/{sample_business.id}/history", params={"session_id": "test_sess"}
     )
-    assert review_resp.status_code == 200
-    assert review_resp.json()["intent"] == "review_respond"
+    assert hist_resp.status_code == 200
+    assert len(hist_resp.json()) == 2
 
-    sug_resp = await test_client.get(f"/api/agent/{sample_business.id}/suggestions")
-    assert sug_resp.status_code == 200
-    assert len(sug_resp.json()["suggestions"]) >= 1
+    # Approve queued HITL action with edited copy
+    action_id = cdata["queued_approvals"][0]["id"]
+    dec_resp = await test_client.post(
+        f"/api/agent/{sample_business.id}/approvals/{action_id}/decide",
+        json={"decision": "approve", "edited_content": "Approved weekend sourdough drop!"},
+    )
+    assert dec_resp.status_code == 200
+    assert dec_resp.json()["status"] == "executed"
+
+    # Run logs check
+    logs_resp = await test_client.get(f"/api/agent/{sample_business.id}/logs")
+    assert logs_resp.status_code == 200
+    assert len(logs_resp.json()) >= 2
+
+
+async def test_magic_onboard_campaign_health_and_autopilot(
+    test_client: AsyncClient,
+) -> None:
+    """Verify 60-sec magic onboarding, health score, campaign launcher, and autopilot cycle."""
+    onboard_resp = await test_client.post(
+        "/api/agent/magic-onboard",
+        json={
+            "name": "Chai Junction",
+            "category": "cafe",
+            "city": "Pune",
+            "state": "Maharashtra",
+            "phone": "9876543210",
+            "specialty": "Masala chai and bun maska",
+        },
+    )
+    assert onboard_resp.status_code == 201
+    odata = onboard_resp.json()
+    biz_id = odata["business"]["id"]
+    assert odata["starter_posts_created"] == 3
+    assert odata["catalog_items_created"] >= 2
+    assert odata["health_score"] > 50
+
+    hs_resp = await test_client.get(f"/api/agent/{biz_id}/health-score")
+    assert hs_resp.status_code == 200
+    assert len(hs_resp.json()["pillars"]) == 5
+
+    camp_resp = await test_client.post(
+        f"/api/agent/{biz_id}/campaign",
+        json={
+            "occasion": "Monsoon Chai Fest",
+            "offer_details": "Free bun maska with 2 masala chais",
+            "platforms": ["instagram", "google"],
+            "auto_execute": False,
+        },
+    )
+    assert camp_resp.status_code == 200
+    assert camp_resp.json()["approvals_queued"] == 2
+
+    ap_resp = await test_client.post(f"/api/agent/{biz_id}/autopilot/run")
+    assert ap_resp.status_code == 200
+    assert ap_resp.json()["autopilot_enabled"] is True

@@ -1,0 +1,899 @@
+"""LangGraph StateGraph multi-agent supervisor with memory, planning, tool trace, and HITL guardrails."""
+
+from __future__ import annotations
+
+import json
+import re
+import time
+from datetime import UTC, date, datetime, timedelta
+from typing import Any, TypedDict
+
+from langgraph.graph import END, START, StateGraph
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.agents.booking_agent import BookingAgent
+from src.agents.health_and_growth import compute_health_score, get_or_create_agent_config
+from src.agents.llm_client import generate_text_with_llm
+from src.agents.review_agent import ReviewAgent
+from src.agents.social_agent import SocialMediaAgent
+from src.models.agent_models import (
+    AgentApprovalAction,
+    AgentRunLog,
+    AgentThreadMessage,
+    ApprovalStatus,
+    BusinessAgentConfig,
+    OrderRequest,
+    OrderStatus,
+    RiskLevel,
+)
+from src.models.booking import Booking, BookingStatus
+from src.models.business import Business
+from src.models.review import ResponseStatus, Review
+from src.models.social_post import PostStatus, SocialPlatform, SocialPost
+from src.tools.analytics_tools import aggregate_platform_metrics
+from src.tools.content_tools import generate_post_ideas
+from src.tools.google_tools import get_business_insights, post_google_update
+from src.tools.review_tools import analyze_review_sentiment, flag_critical_review
+
+
+class SupervisorState(TypedDict, total=False):
+    """State passed across LangGraph supervisor nodes."""
+
+    business_id: int
+    session_id: str
+    message: str
+    auto_execute: bool
+    language: str
+    overrides: dict[str, Any]
+    history_summary: str
+    plan: list[str]
+    primary_intent: str
+    agent_trace: list[dict[str, Any]]
+    actions_taken: list[str]
+    queued_approvals: list[dict[str, Any]]
+    section_replies: list[str]
+    data: dict[str, Any]
+    suggested_followups: list[str]
+    health_score: int
+    reply: str
+    started_at: float
+
+
+_INTENT_RULES: list[tuple[str, tuple[str, ...]]] = [
+    (
+        "social_create",
+        (
+            "post",
+            "instagram",
+            "facebook",
+            "twitter",
+            "social",
+            "caption",
+            "hashtag",
+            "content",
+            "campaign",
+        ),
+    ),
+    ("review_respond", ("review", "rating", "feedback", "respond", "reply")),
+    ("booking_manage", ("book", "booking", "appointment", "reservation", "slot", "availability")),
+    ("order_manage", ("order", "orders", "delivery", "pickup", "takeaway", "menu")),
+    ("google_profile", ("google", "gbp", "profile", "hours", "seo", "insights", "maps")),
+    (
+        "analytics_overview",
+        ("summary", "overview", "status", "analytics", "performance", "metrics", "health", "audit"),
+    ),
+]
+
+
+def _detect_intents_offline(low: str) -> list[str]:
+    """Extract ordered multi-intent plan from a compound natural-language request."""
+    matched: list[str] = []
+    for intent_name, keywords in _INTENT_RULES:
+        if any(kw in low for kw in keywords):
+            # Avoid matching 'google' alone as google_profile when the user clearly asked for a Google post
+            if (
+                intent_name == "google_profile"
+                and "social_create" in matched
+                and not any(
+                    w in low for w in ("gbp", "profile", "hours", "seo", "insights", "maps")
+                )
+            ):
+                continue
+            matched.append(intent_name)
+    return matched or ["general"]
+
+
+def _extract_platform(low: str) -> str:
+    for plat in ("instagram", "facebook", "google", "twitter"):
+        if plat in low:
+            return plat
+    return "instagram"
+
+
+def _extract_topic(text: str) -> str:
+    match = re.search(
+        r"(?:about|for|highlighting|on)\s+(.+?)(?:\s+and\s+(?:check|show|reply|respond|audit)|$)",
+        text,
+        re.IGNORECASE,
+    )
+    return match.group(1).strip().rstrip(".!") if match else ""
+
+
+async def run_supervisor_turn(
+    db: AsyncSession,
+    business: Business,
+    message: str,
+    auto_execute: bool = True,
+    session_id: str = "default",
+    language: str | None = None,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Execute a full LangGraph Supervisor turn with memory, planning, tools, and HITL."""
+    cfg: BusinessAgentConfig = await get_or_create_agent_config(db, business.id)
+    resolved_language = (language or cfg.preferred_language or "English").strip()
+    overrides = context or {}
+
+    # Load last 6 messages for multi-turn memory
+    hist_stmt = (
+        select(AgentThreadMessage)
+        .where(
+            AgentThreadMessage.business_id == business.id,
+            AgentThreadMessage.session_id == session_id,
+        )
+        .order_by(AgentThreadMessage.created_at.desc())
+        .limit(6)
+    )
+    recent_msgs = list((await db.execute(hist_stmt)).scalars().all())
+    recent_msgs.reverse()
+    history_summary = "\n".join(f"{m.role.upper()}: {m.content[:180]}" for m in recent_msgs)
+
+    social_agent = SocialMediaAgent()
+    review_agent = ReviewAgent()
+    booking_agent = BookingAgent()
+
+    async def plan_node(state: SupervisorState) -> SupervisorState:
+        text = state["message"].strip()
+        low = text.lower()
+        plan = _detect_intents_offline(low)
+
+        # Optionally refine multi-step plan with LLM when API key is configured
+        llm_plan_raw = await generate_text_with_llm(
+            system_prompt=(
+                "You are an AI Supervisor Planner for a local business assistant. "
+                "Classify the user message into 1 to 3 ordered tasks from this exact list: "
+                "['social_create', 'review_respond', 'booking_manage', 'order_manage', "
+                "'google_profile', 'analytics_overview', 'general']. "
+                'Reply ONLY with a JSON array of strings, e.g. ["social_create", "review_respond"].'
+            ),
+            user_prompt=(
+                f"Recent conversation:\n{state.get('history_summary') or '(none)'}\n\n"
+                f"Current request: {text}"
+            ),
+            overrides=overrides,
+            temperature=0.0,
+            max_tokens=80,
+        )
+        if llm_plan_raw:
+            try:
+                parsed = json.loads(
+                    llm_plan_raw.strip()
+                    .removeprefix("```json")
+                    .removeprefix("```")
+                    .removesuffix("```")
+                    .strip()
+                )
+                allowed = {
+                    "social_create",
+                    "review_respond",
+                    "booking_manage",
+                    "order_manage",
+                    "google_profile",
+                    "analytics_overview",
+                    "general",
+                }
+                if isinstance(parsed, list):
+                    valid = [t for t in parsed if isinstance(t, str) and t in allowed]
+                    if valid:
+                        plan = valid[:3]
+            except (ValueError, TypeError):
+                pass
+
+        trace = list(state.get("agent_trace") or [])
+        trace.append(
+            {
+                "agent": "SupervisorPlanner",
+                "tool": "decompose_tasks",
+                "status": "completed",
+                "detail": f"Planned {len(plan)} step(s): {' → '.join(plan)}",
+            }
+        )
+        return {
+            "plan": plan,
+            "primary_intent": plan[0],
+            "agent_trace": trace,
+        }
+
+    async def execute_node(state: SupervisorState) -> SupervisorState:
+        text = state["message"].strip()
+        low = text.lower()
+        plan = state.get("plan") or ["general"]
+        can_execute = state.get("auto_execute", True)
+
+        trace = list(state.get("agent_trace") or [])
+        actions_taken: list[str] = []
+        queued_approvals: list[dict[str, Any]] = []
+        sections: list[str] = []
+        data: dict[str, Any] = {}
+        followups: list[str] = []
+
+        for step in plan:
+            if step == "social_create":
+                platform_str = _extract_platform(low)
+                topic = _extract_topic(text)
+                generated = await social_agent.generate_post(
+                    business=business,
+                    platform=platform_str,
+                    topic=topic,
+                    tone=cfg.brand_voice,
+                    language=resolved_language,
+                    overrides=overrides,
+                )
+                ideas = generate_post_ideas.invoke({"business_type": business.category, "count": 2})
+                data["generated_post"] = generated
+                data["post_ideas"] = ideas
+
+                wants_action = any(
+                    k in low
+                    for k in ("schedule", "publish", "post it", "create", "draft", "campaign")
+                )
+                is_schedule = "schedule" in low
+                is_draft = "draft" in low and not is_schedule
+                now = datetime.now(UTC)
+                scheduled_at = (
+                    (now + timedelta(days=1)).replace(hour=11, minute=30, second=0, microsecond=0)
+                    if is_schedule
+                    else None
+                )
+                hashtags_line = " ".join(generated["hashtags"])
+                full_content = (
+                    f"{generated['content']}\n\n{hashtags_line}".strip()
+                    if hashtags_line
+                    else generated["content"]
+                )
+
+                if wants_action and can_execute:
+                    post_status = (
+                        PostStatus.SCHEDULED
+                        if is_schedule
+                        else (PostStatus.DRAFT if is_draft else PostStatus.PUBLISHED)
+                    )
+                    post = SocialPost(
+                        business_id=business.id,
+                        platform=SocialPlatform(platform_str),
+                        content=full_content,
+                        status=post_status,
+                        scheduled_at=scheduled_at,
+                        published_at=now if post_status == PostStatus.PUBLISHED else None,
+                    )
+                    db.add(post)
+                    await db.flush()
+                    if platform_str == "google" and business.google_business_id:
+                        post_google_update.invoke(
+                            {
+                                "location_id": business.google_business_id,
+                                "content": full_content,
+                            }
+                        )
+                    actions_taken.append(
+                        f"Created {post_status.value} {platform_str} post (ID #{post.id})"
+                    )
+                    data["post_id"] = post.id
+                    data["status"] = post_status.value
+                    trace.append(
+                        {
+                            "agent": "SocialMediaAgent",
+                            "tool": "create_social_post",
+                            "status": "completed",
+                            "detail": f"Saved {post_status.value} {platform_str} post #{post.id}.",
+                        }
+                    )
+                elif wants_action and not can_execute:
+                    action = AgentApprovalAction(
+                        business_id=business.id,
+                        action_type="publish_post",
+                        title=f"Publish {platform_str.title()} Post",
+                        description=f"AI-generated {platform_str} post awaiting owner approval.",
+                        agent_name="SocialMediaAgent",
+                        reasoning="Copilot mode requires human confirmation before publishing.",
+                        risk_level=RiskLevel.LOW,
+                        payload={
+                            "platform": platform_str,
+                            "content": full_content,
+                            "status": "scheduled" if is_schedule else "published",
+                            "scheduled_at": scheduled_at.isoformat() if scheduled_at else None,
+                        },
+                        status=ApprovalStatus.PENDING,
+                    )
+                    db.add(action)
+                    await db.flush()
+                    queued_approvals.append(
+                        {
+                            "id": action.id,
+                            "action_type": action.action_type,
+                            "title": action.title,
+                            "risk_level": action.risk_level.value,
+                        }
+                    )
+                    trace.append(
+                        {
+                            "agent": "SocialMediaAgent",
+                            "tool": "queue_approval",
+                            "status": "awaiting_approval",
+                            "detail": f"Queued {platform_str} post in Approval Inbox (#{action.id}).",
+                        }
+                    )
+                else:
+                    trace.append(
+                        {
+                            "agent": "SocialMediaAgent",
+                            "tool": "generate_post",
+                            "status": "completed",
+                            "detail": f"Drafted {platform_str} copy and hashtags.",
+                        }
+                    )
+
+                hashtags_str = " ".join(generated["hashtags"])
+                sec = (
+                    f"Here is a {generated['platform'].title()} post for **{business.name}**:\n\n"
+                    f"> {generated['content']}\n\n"
+                    f"**Hashtags:** {hashtags_str or 'None'}\n"
+                    f"**Best time to post:** {generated['best_time_to_post']}"
+                )
+                if actions_taken:
+                    sec += f"\n\n✅ Action completed: {actions_taken[-1]}."
+                elif queued_approvals:
+                    sec += "\n\n🟡 Queued in **Approval Inbox** so you can review & publish with 1 click."
+                sections.append(sec)
+                followups.extend(
+                    [
+                        "Schedule this post for tomorrow morning",
+                        "Launch a 3-platform weekend campaign",
+                        "Show my upcoming content calendar",
+                    ]
+                )
+
+            elif step == "review_respond":
+                stmt = (
+                    select(Review)
+                    .where(
+                        Review.business_id == business.id,
+                        Review.response_status == ResponseStatus.PENDING,
+                    )
+                    .order_by(Review.created_at.desc())
+                )
+                pending = list((await db.execute(stmt)).scalars().all())
+                if not pending:
+                    sections.append(
+                        f"Great news! **{business.name}** has 0 pending reviews—all customer "
+                        "reviews have already been responded to."
+                    )
+                    trace.append(
+                        {
+                            "agent": "ReviewManagerAgent",
+                            "tool": "fetch_pending_reviews",
+                            "status": "completed",
+                            "detail": "0 pending reviews found.",
+                        }
+                    )
+                else:
+                    do_auto = can_execute and any(
+                        k in low for k in ("auto", "all", "respond to", "reply to", "send")
+                    )
+                    drafts: list[dict[str, Any]] = []
+                    now = datetime.now(UTC)
+                    auto_sent_count = 0
+                    for rev in pending[:10]:
+                        sent_info = analyze_review_sentiment.invoke(
+                            {"review_text": rev.review_text or ""}
+                        )
+                        if sent_info.get("requires_escalation"):
+                            flag_critical_review.invoke(
+                                {
+                                    "platform": rev.platform,
+                                    "review_id": str(rev.id),
+                                    "reason": "Negative review flagged by sentiment guardrail",
+                                    "severity": "high",
+                                }
+                            )
+                        draft = await review_agent.draft_response(
+                            business=business,
+                            review=rev,
+                            tone=cfg.brand_voice,
+                            language=resolved_language,
+                            overrides=overrides,
+                        )
+                        needs_hitl = (
+                            rev.rating <= 2 and cfg.require_approval_negative_reviews
+                        ) or not do_auto
+
+                        if do_auto and not needs_hitl:
+                            rev.response_text = draft
+                            rev.response_status = ResponseStatus.RESPONDED
+                            rev.responded_at = now
+                            auto_sent_count += 1
+                        elif not can_execute or (do_auto and needs_hitl):
+                            action = AgentApprovalAction(
+                                business_id=business.id,
+                                action_type="reply_review",
+                                title=f"Reply to {rev.reviewer_name} ({rev.rating}★ on {rev.platform.title()})",
+                                description=rev.review_text or "(Rating only)",
+                                agent_name="ReviewManagerAgent",
+                                reasoning=(
+                                    "Low-rating review held by safety guardrail for owner approval."
+                                    if rev.rating <= 2
+                                    else "Copilot mode draft awaiting owner confirmation."
+                                ),
+                                risk_level=RiskLevel.HIGH if rev.rating <= 2 else RiskLevel.LOW,
+                                payload={"review_id": rev.id, "response_text": draft},
+                                status=ApprovalStatus.PENDING,
+                            )
+                            db.add(action)
+                            await db.flush()
+                            queued_approvals.append(
+                                {
+                                    "id": action.id,
+                                    "action_type": action.action_type,
+                                    "title": action.title,
+                                    "risk_level": action.risk_level.value,
+                                }
+                            )
+
+                        drafts.append(
+                            {
+                                "review_id": rev.id,
+                                "reviewer": rev.reviewer_name,
+                                "rating": rev.rating,
+                                "draft": draft,
+                            }
+                        )
+
+                    await db.flush()
+                    data["drafts"] = drafts
+                    if auto_sent_count > 0:
+                        actions_taken.append(
+                            f"Auto-responded to {auto_sent_count} pending review(s)"
+                        )
+                    if queued_approvals:
+                        actions_taken.append(
+                            f"Queued {len(queued_approvals)} sensitive/draft reply(ies) for approval"
+                        )
+                    trace.append(
+                        {
+                            "agent": "ReviewManagerAgent",
+                            "tool": "analyze_and_draft_replies",
+                            "status": "completed",
+                            "detail": (
+                                f"Processed {len(drafts)} pending review(s): "
+                                f"{auto_sent_count} published, {len(queued_approvals)} queued for HITL."
+                            ),
+                        }
+                    )
+
+                    preview = "\n".join(
+                        f"- **{d['reviewer']} ({d['rating']}★):** {d['draft']}" for d in drafts[:3]
+                    )
+                    sections.append(
+                        f"Processed **{len(pending)} pending review(s)** for **{business.name}** "
+                        f"({auto_sent_count} sent automatically, {len(queued_approvals)} awaiting approval):\n\n{preview}"
+                    )
+                followups.extend(
+                    ["Open Approval Inbox to review drafts", "Give me a summary of our performance"]
+                )
+
+            elif step == "booking_manage":
+                today = date.today()
+                stmt = (
+                    select(Booking)
+                    .where(
+                        Booking.business_id == business.id,
+                        Booking.booking_date >= today,
+                        Booking.status != BookingStatus.CANCELLED,
+                    )
+                    .order_by(Booking.booking_date.asc(), Booking.booking_time.asc())
+                )
+                upcoming = list((await db.execute(stmt)).scalars().all())
+                avail = await booking_agent.get_availability(db, business, today)
+                open_slots = [s["start_time"] for s in avail["slots"] if s["available"]]
+                data["upcoming_count"] = len(upcoming)
+                data["today_open_slots"] = open_slots[:8]
+
+                trace.append(
+                    {
+                        "agent": "BookingAgent",
+                        "tool": "get_availability",
+                        "status": "completed",
+                        "detail": f"Found {len(upcoming)} upcoming booking(s) and {len(open_slots)} open slot(s) today.",
+                    }
+                )
+                if upcoming:
+                    lines = "\n".join(
+                        f"- **{b.booking_date} {b.booking_time.strftime('%H:%M')}** — "
+                        f"{b.customer_name} ({b.service}, {b.status.value})"
+                        for b in upcoming[:5]
+                    )
+                    sections.append(
+                        f"**{business.name}** has **{len(upcoming)} upcoming booking(s)**:\n\n{lines}\n\n"
+                        f"**Open slots today:** {', '.join(open_slots[:6]) if open_slots else 'Fully booked / Closed'}"
+                    )
+                else:
+                    sections.append(
+                        f"No upcoming bookings found for **{business.name}**. "
+                        f"Open slots today: {', '.join(open_slots[:6]) if open_slots else 'Closed today'}."
+                    )
+                followups.append("Promote today's open slots on Instagram")
+
+            elif step == "order_manage":
+                orders = list(
+                    (
+                        await db.execute(
+                            select(OrderRequest)
+                            .where(OrderRequest.business_id == business.id)
+                            .order_by(OrderRequest.created_at.desc())
+                            .limit(10)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                active = [
+                    o
+                    for o in orders
+                    if o.status not in {OrderStatus.COMPLETED, OrderStatus.CANCELLED}
+                ]
+                data["active_orders_count"] = len(active)
+                trace.append(
+                    {
+                        "agent": "OrderAgent",
+                        "tool": "fetch_active_orders",
+                        "status": "completed",
+                        "detail": f"Found {len(active)} active online order(s) out of {len(orders)} recent.",
+                    }
+                )
+                if active:
+                    lines = "\n".join(
+                        f"- **Order #{o.id}** — {o.customer_name} ({o.fulfillment_type.value}, "
+                        f"${o.total_amount:.2f}, `{o.status.value}`)"
+                        for o in active[:5]
+                    )
+                    sections.append(f"**Active Online Orders ({len(active)}):**\n\n{lines}")
+                else:
+                    sections.append(
+                        f"No active pending orders right now. Share your customer storefront "
+                        f"(`/site/{business.id}`) to start receiving online orders!"
+                    )
+
+            elif step == "google_profile":
+                loc_id = business.google_business_id or f"loc_{business.id}"
+                insights = get_business_insights.invoke({"location_id": loc_id, "days": 30})
+                data["google_insights"] = insights
+                trace.append(
+                    {
+                        "agent": "GoogleBusinessAgent",
+                        "tool": "get_business_insights",
+                        "status": "completed",
+                        "detail": f"Checked GBP status ({'verified' if business.google_business_id else 'not linked'}) and 30d insights.",
+                    }
+                )
+                summary = insights.get("summary", {})
+                sections.append(
+                    f"**Google Business Profile ({'Verified ✅' if business.google_business_id else 'Not Linked ⚠️'}):**\n"
+                    f"- **Profile Views (30d):** {summary.get('total_views', 'N/A')}\n"
+                    f"- **Direction Requests:** {summary.get('direction_requests', 'N/A')} | "
+                    f"**Calls:** {summary.get('phone_calls', 'N/A')} | "
+                    f"**Website Clicks:** {summary.get('website_clicks', 'N/A')}"
+                )
+
+            elif step == "analytics_overview":
+                reviews = list(
+                    (await db.execute(select(Review).where(Review.business_id == business.id)))
+                    .scalars()
+                    .all()
+                )
+                posts = list(
+                    (
+                        await db.execute(
+                            select(SocialPost).where(SocialPost.business_id == business.id)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                bookings = list(
+                    (await db.execute(select(Booking).where(Booking.business_id == business.id)))
+                    .scalars()
+                    .all()
+                )
+                health = await compute_health_score(db, business)
+                agg = aggregate_platform_metrics.invoke(
+                    {"business_id": str(business.id), "days": 30}
+                )
+                avg_rating = (
+                    round(sum(r.rating for r in reviews) / len(reviews), 2) if reviews else 0.0
+                )
+                pending_rev = sum(1 for r in reviews if r.response_status == ResponseStatus.PENDING)
+                upcoming_bk = sum(
+                    1
+                    for b in bookings
+                    if b.booking_date >= date.today() and b.status != BookingStatus.CANCELLED
+                )
+                data.update(
+                    {
+                        "total_reviews": len(reviews),
+                        "average_rating": avg_rating,
+                        "pending_reviews": pending_rev,
+                        "total_posts": len(posts),
+                        "upcoming_bookings": upcoming_bk,
+                        "health_score": health["overall_score"],
+                        "platform_metrics": agg,
+                    }
+                )
+                trace.append(
+                    {
+                        "agent": "AnalyticsAgent",
+                        "tool": "compute_health_score",
+                        "status": "completed",
+                        "detail": f"Health Score: {health['overall_score']}/100 (Grade {health['grade']}).",
+                    }
+                )
+                sections.append(
+                    f"**Digital Presence Snapshot for {business.name}** "
+                    f"(Health Score: **{health['overall_score']}/100 — {health['grade']}**):\n\n"
+                    f"- **Reviews:** {len(reviews)} total ({avg_rating}★ avg, {pending_rev} pending reply)\n"
+                    f"- **Social Posts:** {len(posts)} total\n"
+                    f"- **Upcoming Bookings:** {upcoming_bk}\n"
+                    f"- **Top Priority Tip:** {health['top_recommendation']}"
+                )
+
+            else:
+                rev_count = (
+                    await db.execute(
+                        select(func.count(Review.id)).where(Review.business_id == business.id)
+                    )
+                ).scalar_one()
+                pending_count = (
+                    await db.execute(
+                        select(func.count(Review.id)).where(
+                            Review.business_id == business.id,
+                            Review.response_status == ResponseStatus.PENDING,
+                        )
+                    )
+                ).scalar_one()
+                posts_count = (
+                    await db.execute(
+                        select(func.count(SocialPost.id)).where(
+                            SocialPost.business_id == business.id
+                        )
+                    )
+                ).scalar_one()
+                next_avail = await booking_agent.next_available_summary(db, business)
+                llm_reply = await generate_text_with_llm(
+                    system_prompt=(
+                        f"You are BizPresence AI, a helpful digital presence assistant for {business.name} "
+                        f"({business.category} in {business.city or ''}, {business.state or ''}). "
+                        f"Reply in {resolved_language}. Give practical, concise guidance."
+                    ),
+                    user_prompt=(
+                        f"Recent chat:\n{state.get('history_summary') or '(none)'}\n\n"
+                        f"Context: {rev_count} reviews ({pending_count} pending), {posts_count} social posts, "
+                        f"next booking slots: {next_avail}.\nUser asks: {text}"
+                    ),
+                    overrides=overrides,
+                    temperature=0.7,
+                    max_tokens=350,
+                )
+                trace.append(
+                    {
+                        "agent": "GeneralAdvisorAgent",
+                        "tool": "answer_with_business_context",
+                        "status": "completed",
+                        "detail": "Generated context-aware guidance.",
+                    }
+                )
+                sections.append(
+                    llm_reply
+                    or (
+                        f"I'm ready to help grow **{business.name}**! Right now you have **{rev_count} reviews** "
+                        f"({pending_count} pending reply), **{posts_count} social posts**, and open booking slots "
+                        f"{next_avail}.\n\n"
+                        "Try asking me multi-step goals like:\n"
+                        '- *"Create an Instagram post about our weekend special and check today\'s bookings"*\n'
+                        '- *"Draft responses for pending reviews"*\n'
+                        '- *"Give me a full digital presence audit"*'
+                    )
+                )
+
+        health = await compute_health_score(db, business)
+        return {
+            "agent_trace": trace,
+            "actions_taken": actions_taken,
+            "queued_approvals": queued_approvals,
+            "section_replies": sections,
+            "data": data,
+            "suggested_followups": followups[:3]
+            or [
+                "Create an Instagram post about our weekend special",
+                "Draft responses for pending reviews",
+                "Show my digital presence health audit",
+            ],
+            "health_score": health["overall_score"],
+        }
+
+    async def synthesize_node(state: SupervisorState) -> SupervisorState:
+        combined_reply = "\n\n---\n\n".join(state.get("section_replies") or [])
+        plan = state.get("plan") or ["general"]
+        trace = list(state.get("agent_trace") or [])
+        primary_intent = state.get("primary_intent") or plan[0]
+
+        # Persist conversation turns in AgentThreadMessage
+        db.add(
+            AgentThreadMessage(
+                business_id=business.id,
+                session_id=session_id,
+                role="user",
+                content=state["message"],
+                intent=primary_intent,
+                agent_trace=[],
+            )
+        )
+        db.add(
+            AgentThreadMessage(
+                business_id=business.id,
+                session_id=session_id,
+                role="assistant",
+                content=combined_reply,
+                intent=primary_intent,
+                agent_trace=trace,
+            )
+        )
+
+        # Log full multi-agent run for observability
+        duration_ms = int(
+            (time.perf_counter() - state.get("started_at", time.perf_counter())) * 1000
+        )
+        db.add(
+            AgentRunLog(
+                business_id=business.id,
+                trigger_source="chat",
+                goal=state["message"],
+                agents_invoked=list(dict.fromkeys(t["agent"] for t in trace)),
+                tools_called=list(dict.fromkeys(t["tool"] for t in trace)),
+                steps_summary=trace,
+                outcome="awaiting_approval" if state.get("queued_approvals") else "completed",
+                duration_ms=duration_ms,
+            )
+        )
+        await db.flush()
+        return {"reply": combined_reply}
+
+    graph = StateGraph(SupervisorState)
+    graph.add_node("planner", plan_node)
+    graph.add_node("executor", execute_node)
+    graph.add_node("synthesizer", synthesize_node)
+    graph.add_edge(START, "planner")
+    graph.add_edge("planner", "executor")
+    graph.add_edge("executor", "synthesizer")
+    graph.add_edge("synthesizer", END)
+
+    compiled = graph.compile()
+    final_state: SupervisorState = await compiled.ainvoke(
+        {
+            "business_id": business.id,
+            "session_id": session_id,
+            "message": message,
+            "auto_execute": auto_execute,
+            "language": resolved_language,
+            "overrides": overrides,
+            "history_summary": history_summary,
+            "agent_trace": [],
+            "started_at": time.perf_counter(),
+        }
+    )
+
+    return {
+        "business_id": business.id,
+        "reply": final_state["reply"],
+        "intent": final_state["primary_intent"],
+        "actions_taken": final_state.get("actions_taken") or [],
+        "data": final_state.get("data") or {},
+        "suggested_followups": final_state.get("suggested_followups") or [],
+        "plan": final_state.get("plan") or [],
+        "agent_trace": final_state.get("agent_trace") or [],
+        "queued_approvals": final_state.get("queued_approvals") or [],
+        "health_score": final_state.get("health_score"),
+    }
+
+
+async def decide_approval_action(
+    db: AsyncSession,
+    business: Business,
+    action: AgentApprovalAction,
+    decision: str,
+    edited_content: str | None = None,
+) -> AgentApprovalAction:
+    """Approve (optionally with edited content) or reject a queued HITL agent action."""
+    now = datetime.now(UTC)
+    if decision == "reject":
+        action.status = ApprovalStatus.REJECTED
+        action.decided_at = now
+        await db.flush()
+        return action
+
+    payload = dict(action.payload or {})
+
+    if action.action_type == "publish_post":
+        content = (edited_content or payload.get("content") or "").strip()
+        platform = SocialPlatform(payload.get("platform", "instagram"))
+        target_status = payload.get("status", "published")
+        sched_raw = payload.get("scheduled_at")
+        sched_dt = datetime.fromisoformat(sched_raw) if sched_raw else None
+        post_status = (
+            PostStatus.SCHEDULED
+            if target_status == "scheduled" and sched_dt is not None
+            else PostStatus.PUBLISHED
+        )
+        post = SocialPost(
+            business_id=business.id,
+            platform=platform,
+            content=content,
+            status=post_status,
+            scheduled_at=sched_dt if post_status == PostStatus.SCHEDULED else None,
+            published_at=now if post_status == PostStatus.PUBLISHED else None,
+        )
+        db.add(post)
+        await db.flush()
+        payload["executed_post_id"] = post.id
+        payload["content"] = content
+
+    elif action.action_type == "reply_review":
+        review_id = payload.get("review_id")
+        response_text = (edited_content or payload.get("response_text") or "").strip()
+        if review_id is not None and response_text:
+            rev = (
+                await db.execute(
+                    select(Review).where(
+                        Review.id == int(review_id),
+                        Review.business_id == business.id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if rev:
+                rev.response_text = response_text
+                rev.response_status = ResponseStatus.RESPONDED
+                rev.responded_at = now
+                payload["response_text"] = response_text
+
+    action.payload = payload
+    action.status = ApprovalStatus.EXECUTED
+    action.decided_at = now
+    db.add(
+        AgentRunLog(
+            business_id=business.id,
+            trigger_source="hitl_approval",
+            goal=f"Human approved and executed: {action.title}",
+            agents_invoked=[action.agent_name],
+            tools_called=[action.action_type],
+            steps_summary=[
+                {
+                    "agent": action.agent_name,
+                    "tool": action.action_type,
+                    "status": "executed",
+                    "detail": f"Approved action #{action.id} executed.",
+                }
+            ],
+            outcome="executed",
+            duration_ms=5,
+        )
+    )
+    await db.flush()
+    return action

@@ -67,12 +67,13 @@ class ReviewAgent:
         business: Business,
         review: Review,
         tone: str = "warm and professional",
+        language: str = "English",
         overrides: dict[str, Any] | None = None,
     ) -> str:
         """Generate an empathetic, brand-aligned reply to a customer review."""
         system_prompt = (
             "You are the customer experience manager for a local business. "
-            "Write a concise, genuine, polite response (2-4 sentences) to the customer review. "
+            f"Write a concise, genuine, polite response (2-4 sentences) in {language} to the customer review. "
             "If the review is negative, acknowledge the concern empathetically without being defensive "
             "and invite them to reconnect directly."
         )
@@ -83,6 +84,7 @@ class ReviewAgent:
             f"Rating: {review.rating}/5 on {review.platform}\n"
             f"Review: {review.review_text or '(No written comment)'}\n"
             f"Tone: {tone}\n"
+            f"Language: {language}\n"
             "Write the owner's reply:"
         )
 

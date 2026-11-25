@@ -13,8 +13,10 @@ from src.api import (
     agent_routes,
     booking_routes,
     business_routes,
+    order_routes,
     review_routes,
     social_routes,
+    storefront_routes,
 )
 from src.database import get_db
 
@@ -42,4 +44,6 @@ api_router.include_router(business_routes.router)
 api_router.include_router(social_routes.router)
 api_router.include_router(review_routes.router)
 api_router.include_router(booking_routes.router)
+api_router.include_router(order_routes.router)
 api_router.include_router(agent_routes.router)
+api_router.include_router(storefront_routes.router)

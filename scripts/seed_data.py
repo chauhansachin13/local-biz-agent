@@ -16,6 +16,17 @@ if str(ROOT_DIR) not in sys.path:
 
 from config.settings import settings  # noqa: E402
 from src.database.db import Base  # noqa: E402
+from src.models.agent_models import (  # noqa: E402
+    AgentApprovalAction,
+    AgentRunLog,
+    AgentThreadMessage,
+    ApprovalStatus,
+    BusinessAgentConfig,
+    FulfillmentType,
+    OrderRequest,
+    OrderStatus,
+    RiskLevel,
+)
 from src.models.booking import Booking, BookingStatus  # noqa: E402
 from src.models.business import Business  # noqa: E402
 from src.models.review import ResponseStatus, Review, Sentiment  # noqa: E402
@@ -31,6 +42,11 @@ def seed_database(reset: bool = True) -> None:
 
     with Session(engine) as db:
         if reset:
+            db.query(AgentRunLog).delete()
+            db.query(AgentThreadMessage).delete()
+            db.query(AgentApprovalAction).delete()
+            db.query(OrderRequest).delete()
+            db.query(BusinessAgentConfig).delete()
             db.query(Booking).delete()
             db.query(Review).delete()
             db.query(SocialPost).delete()
@@ -372,8 +388,139 @@ def seed_database(reset: bool = True) -> None:
             ),
         ]
         db.add_all(bookings)
+        db.flush()
+
+        # ------------------------------------------------------------------
+        # 5. Agent Configs, Sample Online Orders & HITL Approval Item
+        # ------------------------------------------------------------------
+        configs = [
+            BusinessAgentConfig(
+                business_id=restaurant.id,
+                autopilot_enabled=True,
+                auto_publish_scheduled=True,
+                auto_reply_positive_reviews=False,
+                require_approval_negative_reviews=True,
+                preferred_language="English",
+                brand_voice="warm Italian hospitality",
+                catalog_items=[
+                    {
+                        "name": "Wood-Fired Margherita Pizza",
+                        "price": 18.0,
+                        "description": "San Marzano tomatoes, fior di latte & fresh basil",
+                    },
+                    {
+                        "name": "Handmade Truffle Tagliatelle",
+                        "price": 24.0,
+                        "description": "Fresh pasta with black truffle cream",
+                    },
+                    {
+                        "name": "Classic Tiramisu",
+                        "price": 10.0,
+                        "description": "Espresso-soaked savoiardi & mascarpone",
+                    },
+                ],
+                faqs=[
+                    {
+                        "q": "Do you have gluten-free pasta?",
+                        "a": "Yes, gluten-free pasta and cauliflower crust are available on request.",
+                    },
+                    {
+                        "q": "Can I book patio tables online?",
+                        "a": "Yes, book directly via our online storefront or call us.",
+                    },
+                ],
+            ),
+            BusinessAgentConfig(
+                business_id=salon.id,
+                autopilot_enabled=True,
+                auto_publish_scheduled=True,
+                auto_reply_positive_reviews=False,
+                require_approval_negative_reviews=True,
+                preferred_language="English",
+                brand_voice="warm, uplifting, and boutique luxury",
+                catalog_items=[
+                    {
+                        "name": "Signature Cut & Blowout",
+                        "price": 75.0,
+                        "description": "Tailored cut, wash, and styling",
+                    },
+                    {
+                        "name": "Lived-In Balayage Package",
+                        "price": 195.0,
+                        "description": "Hand-painted dimension + gloss treatment",
+                    },
+                    {
+                        "name": "Botanical Scalp Ritual",
+                        "price": 55.0,
+                        "description": "45-min organic steam & scalp massage",
+                    },
+                ],
+                faqs=[
+                    {
+                        "q": "Do you use organic hair color?",
+                        "a": "Yes, we specialize in ammonia-free botanical color lines.",
+                    },
+                ],
+            ),
+        ]
+        db.add_all(configs)
+
+        orders = [
+            OrderRequest(
+                business_id=restaurant.id,
+                customer_name="Daniel Carter",
+                customer_phone="(512) 555-3001",
+                customer_email="daniel.c@example.com",
+                items=[
+                    {"name": "Wood-Fired Margherita Pizza", "quantity": 2, "price": 18.0},
+                    {"name": "Classic Tiramisu", "quantity": 1, "price": 10.0},
+                ],
+                total_amount=46.0,
+                fulfillment_type=FulfillmentType.PICKUP,
+                status=OrderStatus.CONFIRMED,
+                notes="Extra basil please",
+            ),
+            OrderRequest(
+                business_id=salon.id,
+                customer_name="Rachel Kim",
+                customer_phone="(206) 555-3002",
+                items=[{"name": "Botanical Scalp Ritual", "quantity": 1, "price": 55.0}],
+                total_amount=55.0,
+                fulfillment_type=FulfillmentType.PICKUP,
+                status=OrderStatus.NEW,
+                notes="Gift voucher pickup",
+            ),
+        ]
+        db.add_all(orders)
+
+        neg_review = next(r for r in reviews if r.business_id == restaurant.id and r.rating == 2)
+        db.flush()
+        db.add(
+            AgentApprovalAction(
+                business_id=restaurant.id,
+                action_type="reply_review",
+                title=f"Reply to {neg_review.reviewer_name} (2★ Facebook)",
+                description=neg_review.review_text or "",
+                agent_name="ReviewWatchdogAgent",
+                reasoning="2-star review held by HITL guardrail for owner sign-off before posting.",
+                risk_level=RiskLevel.HIGH,
+                payload={
+                    "review_id": neg_review.id,
+                    "response_text": (
+                        "Hi Marcus, thank you for sharing this feedback, and please accept our sincere "
+                        "apologies for the 35-minute wait despite your reservation. We're addressing "
+                        "kitchen pacing with our team and would love to invite you back—please email "
+                        "hello@bellanapoli-austin.com so we can personally take care of you."
+                    ),
+                },
+                status=ApprovalStatus.PENDING,
+            )
+        )
         db.commit()
-        print("Seed complete: inserted 2 businesses, 10 reviews, 5 social posts, and 8 bookings.")
+        print(
+            "Seed complete: inserted 2 businesses, 10 reviews, 5 social posts, 8 bookings, "
+            "2 orders, and 1 HITL approval draft."
+        )
 
 
 if __name__ == "__main__":
