@@ -6,12 +6,18 @@ import re
 from datetime import date, time, timedelta
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.booking_agent import BookingAgent
 from src.agents.health_and_growth import get_or_create_agent_config
 from src.agents.llm_client import generate_text_with_llm
 from src.agents.orchestrator import BizPresenceOrchestrator
+from src.agents.revenue_and_growth import (
+    answer_from_knowledge_base,
+    notify_waitlist_for_cancelled_booking,
+    validate_and_compute_discount,
+)
 from src.models.agent_models import FulfillmentType, OrderRequest, OrderStatus, WhatsAppMessage
 from src.models.booking import Booking, BookingStatus
 from src.models.business import Business
@@ -134,6 +140,44 @@ def _best_catalog_match(low: str, catalog_items: list[dict[str, Any]]) -> dict[s
     return best_item if best_score > 0 else None
 
 
+async def _find_customer_booking(
+    db: AsyncSession,
+    business_id: int,
+    sender_phone: str,
+    message_text: str,
+) -> Booking | None:
+    """Locate an active booking by explicit #ID or sender phone number."""
+    id_match = re.search(r"#(\d+)\b|\bbooking\s+(\d+)\b", message_text, re.IGNORECASE)
+    if id_match:
+        bid = int(id_match.group(1) or id_match.group(2))
+        return (
+            await db.execute(
+                select(Booking).where(
+                    Booking.id == bid,
+                    Booking.business_id == business_id,
+                    Booking.status != BookingStatus.CANCELLED,
+                )
+            )
+        ).scalar_one_or_none()
+
+    clean_phone = re.sub(r"\D+", "", sender_phone)[-10:]
+    stmt = (
+        select(Booking)
+        .where(
+            Booking.business_id == business_id,
+            Booking.status != BookingStatus.CANCELLED,
+            Booking.booking_date >= date.today(),
+        )
+        .order_by(Booking.booking_date.asc(), Booking.booking_time.asc())
+    )
+    rows = list((await db.execute(stmt)).scalars().all())
+    for b in rows:
+        b_phone = re.sub(r"\D+", "", b.customer_phone or "")[-10:]
+        if clean_phone and b_phone == clean_phone:
+            return b
+    return None
+
+
 async def _handle_customer_message(
     db: AsyncSession,
     business: Business,
@@ -146,7 +190,88 @@ async def _handle_customer_message(
     low = message_text.lower()
     booking_agent = BookingAgent()
 
-    # 1. Customer ordering via WhatsApp (distinguish menu inquiry vs explicit purchase)
+    # 0. Customer booking self-service: cancel or reschedule via WhatsApp
+    if any(w in low for w in ("cancel", "reschedule", "move")) and any(
+        w in low for w in ("book", "booking", "appointment", "reservation", "table", "#")
+    ):
+        bk = await _find_customer_booking(db, business.id, sender_phone, message_text)
+        if bk is None:
+            return (
+                f"Hi {sender_name}, I couldn't find an active booking under your phone or `#ID` at "
+                f"**{business.name}**. Please include your booking ID (e.g., *Cancel booking #3*).",
+                "WhatsAppBookingAgent",
+                {},
+            )
+
+        if "cancel" in low:
+            bk.status = BookingStatus.CANCELLED
+            notified = await notify_waitlist_for_cancelled_booking(db, business, bk)
+            await db.flush()
+            return (
+                f"Done, {sender_name}. Booking **#{bk.id}** ({bk.booking_date.isoformat()} at "
+                f"{bk.booking_time.strftime('%H:%M')}) at **{business.name}** has been cancelled."
+                + (f" ({len(notified)} waitlist guest(s) notified!)" if notified else ""),
+                "WhatsAppBookingAgent",
+                {"cancelled_booking_id": bk.id, "waitlist_notified": len(notified)},
+            )
+
+        # Reschedule workflow
+        iso_match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", low)
+        if iso_match:
+            new_date = date.fromisoformat(iso_match.group(1))
+        elif "tomorrow" in low:
+            new_date = date.today() + timedelta(days=1)
+        elif "today" in low:
+            new_date = date.today()
+        else:
+            new_date = bk.booking_date
+
+        parsed_hm = _parse_whatsapp_time(low)
+        if parsed_hm is None:
+            return (
+                f"Sure {sender_name}, what time should I move booking **#{bk.id}** to on "
+                f"**{new_date.isoformat()}**? (e.g., *Reschedule booking #{bk.id} to tomorrow at 5pm*)",
+                "WhatsAppBookingAgent",
+                {},
+            )
+        hr, mn = parsed_hm
+        avail = await booking_agent.get_availability(db, business, new_date)
+        if not avail["is_open"]:
+            return (
+                f"Sorry {sender_name}, **{business.name}** is closed on **{new_date.isoformat()}**.",
+                "WhatsAppBookingAgent",
+                {},
+            )
+        open_str = avail["open_time"] or "09:00"
+        close_str = avail["close_time"] or "18:00"
+        open_min = int(open_str.split(":")[0]) * 60 + int(open_str.split(":")[1])
+        close_min = int(close_str.split(":")[0]) * 60 + int(close_str.split(":")[1])
+        start_min = hr * 60 + mn
+        if start_min < open_min or start_min + bk.duration_minutes > close_min:
+            return (
+                f"Hi {sender_name}, **{hr:02d}:{mn:02d}** is outside our hours ({open_str}–{close_str}).",
+                "WhatsAppBookingAgent",
+                {},
+            )
+        if await booking_agent.has_conflict(
+            db, business, new_date, start_min, bk.duration_minutes, exclude_booking_id=bk.id
+        ):
+            return (
+                f"Sorry {sender_name}, **{hr:02d}:{mn:02d}** on **{new_date.isoformat()}** is already booked.",
+                "WhatsAppBookingAgent",
+                {},
+            )
+        bk.booking_date = new_date
+        bk.booking_time = time(hr, mn)
+        await db.flush()
+        return (
+            f"Rescheduled! 📅 Booking **#{bk.id}** at **{business.name}** is now confirmed for "
+            f"**{new_date.isoformat()} at {hr:02d}:{mn:02d}**.",
+            "WhatsAppBookingAgent",
+            {"rescheduled_booking_id": bk.id},
+        )
+
+    # 1. Customer ordering via WhatsApp (distinguish menu inquiry vs explicit purchase + promo codes)
     if any(w in low for w in ("order", "pickup", "delivery", "buy", "menu")):
         catalog = list(cfg.catalog_items or [])
         matched_item = _best_catalog_match(low, catalog) or (catalog[0] if catalog else None)
@@ -175,25 +300,58 @@ async def _handle_customer_message(
             qty_match = re.search(r"\b(\d+)\b", low)
             qty = max(1, min(10, int(qty_match.group(1)))) if qty_match else 1
             price = float(matched_item.get("price", 0.0) or 0.0)
+            subtotal = round(price * qty, 2)
+            discount = 0.0
+            applied_code: str | None = None
+
+            code_match = re.search(
+                r"(?:code|promo|coupon|use)\s+([a-z0-9_-]{2,40})", message_text, re.IGNORECASE
+            )
+            if code_match:
+                cand_code = code_match.group(1).strip().upper()
+                chk = await validate_and_compute_discount(
+                    db, business.id, cand_code, subtotal, increment_use=True
+                )
+                if not chk["valid"]:
+                    return (
+                        f"Hi {sender_name}, I couldn't apply that promo code: {chk['reason']} "
+                        "Reply without the code or try another promo code!",
+                        "WhatsAppOrderAgent",
+                        {"promo_error": chk["reason"]},
+                    )
+                discount = float(chk["discount_amount"])
+                applied_code = str(chk["code"])
+
+            total = round(max(0.0, subtotal - discount), 2)
             fulfill = FulfillmentType.DELIVERY if "delivery" in low else FulfillmentType.PICKUP
             order = OrderRequest(
                 business_id=business.id,
                 customer_name=sender_name,
                 customer_phone=sender_phone,
                 items=[{"name": matched_item["name"], "quantity": qty, "price": price}],
-                total_amount=round(price * qty, 2),
+                subtotal_amount=subtotal,
+                discount_amount=discount,
+                promo_code=applied_code,
+                total_amount=total,
                 fulfillment_type=fulfill,
                 status=OrderStatus.NEW,
                 notes=f"Placed via WhatsApp: {message_text[:140]}",
             )
             db.add(order)
             await db.flush()
+            discount_note = (
+                f" (Saved ${discount:.2f} with `{applied_code}`!)" if applied_code else ""
+            )
             return (
                 f"Got it, {sender_name}! ✅ Your WhatsApp order **#{order.id}** for "
-                f"**{qty}× {matched_item['name']}** (${order.total_amount:.2f}, {fulfill.value}) "
-                f"has been sent to **{business.name}**. We'll message you once it's ready!",
+                f"**{qty}× {matched_item['name']}** (**${order.total_amount:.2f}**, {fulfill.value})"
+                f"{discount_note} has been sent to **{business.name}**.",
                 "WhatsAppOrderAgent",
-                {"order_id": order.id, "total_amount": order.total_amount},
+                {
+                    "order_id": order.id,
+                    "total_amount": order.total_amount,
+                    "promo_code": applied_code,
+                },
             )
 
         menu_lines = "\n".join(
@@ -289,7 +447,12 @@ async def _handle_customer_message(
             {"open_slots": open_slots[:6]},
         )
 
-    # 3. Hours / location / general FAQ
+    # 3. Grounded Knowledge Base: active coupons, FAQs, and catalog prices
+    kb_reply, kb_agent = await answer_from_knowledge_base(db, business, cfg, message_text)
+    if kb_reply:
+        return kb_reply, kb_agent, {}
+
+    # 4. Hours / location
     if any(w in low for w in ("hour", "open", "close", "address", "where", "location", "phone")):
         loc = (
             ", ".join(p for p in (business.address, business.city, business.state) if p)

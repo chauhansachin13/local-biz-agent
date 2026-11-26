@@ -293,6 +293,7 @@ with st.sidebar:
         "⭐ Reviews",
         "📅 Bookings & Orders",
         "👥 CRM & Competitors",
+        "💰 Growth, Coupons & ROI",
         "🌐 Customer Storefront",
         "⚙️ Settings",
     ]
@@ -1479,12 +1480,13 @@ elif page == "📅 Bookings & Orders" and selected_business:
             use_container_width=True,
         )
 
-    tab_cal, tab_new, tab_avail, tab_orders = st.tabs(
+    tab_cal, tab_new, tab_avail, tab_orders, tab_waitlist = st.tabs(
         [
             "📅 Bookings Schedule",
             "➕ New Booking",
             "🕒 Check Availability",
             "🛒 Online Orders Queue",
+            "⏰ Booking Waitlist",
         ]
     )
 
@@ -1606,9 +1608,10 @@ elif page == "📅 Bookings & Orders" and selected_business:
                 items_str = ", ".join(f"{it['quantity']}× {it['name']}" for it in o["items"])
                 oc1, oc2, oc3 = st.columns([2.2, 1.0, 1.3])
                 with oc1:
+                    promo_tag = f" • 🎟️ `{o['promo_code']}`" if o.get("promo_code") else ""
                     st.markdown(
                         f"**Order #{o['id']} — {o['customer_name']}** ({o['customer_phone']}) • "
-                        f"**${o['total_amount']:.2f}** (`{o['fulfillment_type']}`)"
+                        f"**${o['total_amount']:.2f}** (`{o['fulfillment_type']}`){promo_tag}"
                     )
                     st.caption(
                         f"Items: {items_str}" + (f" | Note: {o['notes']}" if o.get("notes") else "")
@@ -1635,6 +1638,62 @@ elif page == "📅 Bookings & Orders" and selected_business:
                         else:
                             st.error(res_u)
                 st.divider()
+
+    with tab_waitlist:
+        st.caption(
+            "When any booking above is cancelled, waiting guests for that date are "
+            "automatically alerted on WhatsApp."
+        )
+        ok_wl, wl_rows = api_request("GET", f"/api/growth/{biz_id}/waitlist")
+        if ok_wl and isinstance(wl_rows, list) and wl_rows:
+            for w in wl_rows:
+                wc1, wc2, wc3 = st.columns([2.5, 1.0, 1.4])
+                wc1.markdown(
+                    f"**{w['customer_name']}** ({w['customer_phone']}) — "
+                    f"**{w['preferred_date']} @ {w['preferred_time']}** • {w['service']}"
+                )
+                wc2.markdown(status_badge(w["status"]), unsafe_allow_html=True)
+                with wc3:
+                    w_b1, w_b2 = st.columns(2)
+                    if w["status"] != "booked" and w_b1.button("Book", key=f"wl_book_{w['id']}"):
+                        api_request(
+                            "PATCH",
+                            f"/api/growth/{biz_id}/waitlist/{w['id']}",
+                            json_body={"status": "booked"},
+                        )
+                        st.rerun()
+                    if w_b2.button("Del", key=f"wl_del_{w['id']}"):
+                        api_request("DELETE", f"/api/growth/{biz_id}/waitlist/{w['id']}")
+                        st.rerun()
+        else:
+            st.info("Waitlist is currently empty.")
+
+        with st.form("add_waitlist_dash_form"):
+            st.markdown("**➕ Add Customer to Waitlist**")
+            w1, w2 = st.columns(2)
+            wl_name = w1.text_input("Customer Name*")
+            wl_phone = w2.text_input("Phone*")
+            wl_date = w1.date_input("Preferred Date", value=today + timedelta(days=1))
+            wl_time = w2.time_input("Preferred Time", value=time(18, 30))
+            wl_svc = st.text_input("Service / Party Size", value="Table Reservation")
+            if st.form_submit_button("Add to Waitlist"):
+                if wl_name.strip() and wl_phone.strip():
+                    ok_wadd, res_wadd = api_request(
+                        "POST",
+                        f"/api/growth/{biz_id}/waitlist",
+                        json_body={
+                            "customer_name": wl_name.strip(),
+                            "customer_phone": wl_phone.strip(),
+                            "preferred_date": wl_date.isoformat(),
+                            "preferred_time": wl_time.strftime("%H:%M"),
+                            "service": wl_svc.strip() or "Reservation",
+                        },
+                    )
+                    if ok_wadd:
+                        st.success("Added to waitlist!")
+                        st.rerun()
+                    else:
+                        st.error(res_wadd)
 
 
 # ---------------------------------------------------------------------------
@@ -1745,7 +1804,254 @@ elif page == "👥 CRM & Competitors" and selected_business:
 
 
 # ---------------------------------------------------------------------------
-# PAGE 8: Customer Storefront & Catalog
+# PAGE 8: Growth, Promo Coupons, Segmented Broadcasts, FAQs & ROI
+# ---------------------------------------------------------------------------
+
+elif page == "💰 Growth, Coupons & ROI" and selected_business:
+    biz_id = selected_business["id"]
+    render_header(
+        selected_business,
+        "Revenue ROI, Promo Coupons, Segmented Broadcasts, Concierge FAQs & Localization",
+    )
+
+    tab_roi, tab_coupons, tab_broadcast, tab_faqs = st.tabs(
+        [
+            "📈 Revenue & Top Items",
+            "🎟️ Promo Coupons & Validator",
+            "📣 Broadcasts & Translator",
+            "📚 Grounded FAQ Knowledge Base",
+        ]
+    )
+
+    with tab_roi:
+        ok_rev, rev = api_request("GET", f"/api/growth/{biz_id}/revenue-analytics")
+        if not ok_rev:
+            st.error(rev)
+        else:
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("Est. Total Revenue", f"${rev['total_estimated_revenue']:.2f}")
+            r2.metric(
+                "Net Order Revenue",
+                f"${rev['net_order_revenue']:.2f}",
+                delta=f"-${rev['total_discounts_given']:.2f} promo discounts",
+            )
+            r3.metric("Avg Order Value", f"${rev['average_order_value']:.2f}")
+            r4.metric("Repeat Customer Rate", f"{rev['repeat_customer_rate_pct']}%")
+
+            r5, r6, r7, r8 = st.columns(4)
+            r5.metric("Est. Booking Value", f"${rev['estimated_booking_revenue']:.2f}")
+            r6.metric("Active Coupons", rev["active_coupons"])
+            r7.metric("Coupon Redemptions", rev["total_coupon_redemptions"])
+            r8.metric("Waitlist Waiting", rev["waitlist_waiting_count"])
+
+            col_ti, col_bh = st.columns(2)
+            with col_ti:
+                st.subheader("🏆 Top Ordered Items")
+                if rev.get("top_ordered_items"):
+                    st.dataframe(
+                        pd.DataFrame(rev["top_ordered_items"]),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                else:
+                    st.info("No item sales recorded yet.")
+            with col_bh:
+                st.subheader("🕒 Busiest Booking Hours")
+                if rev.get("busiest_booking_hours"):
+                    st.dataframe(
+                        pd.DataFrame(rev["busiest_booking_hours"]),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                else:
+                    st.info("No booking hour distribution yet.")
+
+    with tab_coupons:
+        col_cform, col_cval = st.columns([1.2, 1.0])
+        with col_cform, st.form("create_coupon_form"):
+            st.markdown("**➕ Create Promo Coupon**")
+            cp1, cp2 = st.columns(2)
+            c_code = cp1.text_input("Code*", placeholder="WEEKEND20")
+            c_title = cp2.text_input("Title*", placeholder="20% off weekend pickup")
+            c_type = cp1.selectbox("Discount Type", ["percent", "fixed"])
+            c_val = cp2.number_input("Value (% or $)*", min_value=1.0, value=15.0, step=1.0)
+            c_min = cp1.number_input("Minimum Order ($)", min_value=0.0, value=15.0, step=5.0)
+            c_uses = cp2.number_input("Max Uses", min_value=1, value=100, step=10)
+            c_exp = st.date_input("Valid Until", value=date.today() + timedelta(days=30))
+            if st.form_submit_button("Create Coupon", type="primary"):
+                if not c_code.strip() or not c_title.strip():
+                    st.warning("Coupon code and title are required.")
+                else:
+                    ok_cc, res_cc = api_request(
+                        "POST",
+                        f"/api/growth/{biz_id}/coupons",
+                        json_body={
+                            "code": c_code.strip(),
+                            "title": c_title.strip(),
+                            "discount_type": c_type,
+                            "discount_value": float(c_val),
+                            "min_order_amount": float(c_min),
+                            "max_uses": int(c_uses),
+                            "valid_until": c_exp.isoformat(),
+                        },
+                    )
+                    if ok_cc:
+                        st.success(f"Coupon `{res_cc['code']}` created!")
+                        st.rerun()
+                    else:
+                        st.error(res_cc)
+
+        with col_cval, st.form("validate_coupon_form"):
+            st.markdown("**🧮 Test Coupon Discount Simulator**")
+            val_code = st.text_input("Promo Code", value="LOCAL15")
+            val_sub = st.number_input("Cart Subtotal ($)", min_value=0.0, value=50.0, step=5.0)
+            if st.form_submit_button("Calculate Discount"):
+                ok_v, res_v = api_request(
+                    "POST",
+                    f"/api/growth/{biz_id}/coupons/validate",
+                    json_body={"code": val_code.strip(), "subtotal": float(val_sub)},
+                )
+                if ok_v:
+                    if res_v["valid"]:
+                        st.success(
+                            f"{res_v['reason']} → Final Total: **${res_v['final_total']:.2f}**"
+                        )
+                    else:
+                        st.warning(res_v["reason"])
+                else:
+                    st.error(res_v)
+
+        st.divider()
+        st.subheader("Active & Past Promo Codes")
+        ok_cp, coupons = api_request("GET", f"/api/growth/{biz_id}/coupons")
+        if ok_cp and isinstance(coupons, list) and coupons:
+            for cp in coupons:
+                c1, c2, c3 = st.columns([2.5, 1.0, 1.2])
+                val_txt = (
+                    f"{int(cp['discount_value'])}% OFF"
+                    if cp["discount_type"] == "percent"
+                    else f"${cp['discount_value']:.2f} OFF"
+                )
+                c1.markdown(
+                    f"**`{cp['code']}`** — **{val_txt}** ({cp['title']}) • "
+                    f"Used `{cp['uses_count']}/{cp['max_uses']}` • Min `${cp['min_order_amount']:.0f}`"
+                )
+                c2.markdown(
+                    status_badge("published" if cp["is_active"] else "draft"),
+                    unsafe_allow_html=True,
+                )
+                with c3:
+                    b_tog, b_del = st.columns(2)
+                    label_tog = "Pause" if cp["is_active"] else "Enable"
+                    if b_tog.button(label_tog, key=f"cp_tog_{cp['id']}"):
+                        api_request(
+                            "PATCH",
+                            f"/api/growth/{biz_id}/coupons/{cp['id']}",
+                            json_body={"is_active": not cp["is_active"]},
+                        )
+                        st.rerun()
+                    if b_del.button("Del", key=f"cp_del_{cp['id']}"):
+                        api_request("DELETE", f"/api/growth/{biz_id}/coupons/{cp['id']}")
+                        st.rerun()
+        else:
+            st.info("No promo coupons configured yet.")
+
+    with tab_broadcast:
+        bc_col, tr_col = st.columns(2)
+        with bc_col, st.form("segmented_broadcast_form"):
+            st.subheader("📣 Segmented WhatsApp Broadcast")
+            bc_seg = st.selectbox("Target Segment", ["All", "VIP", "Regular", "New"])
+            bc_topic = st.text_input(
+                "Offer / Announcement*", placeholder="Fresh chef tasting dinner this Friday!"
+            )
+            bc_promo = st.text_input("Attach Promo Code (optional)", placeholder="LOCAL15")
+            bc_auto = st.toggle("Send Immediately (Off = Approval Inbox)", value=False)
+            if st.form_submit_button("Launch Broadcast", type="primary"):
+                if not bc_topic.strip():
+                    st.warning("Enter an announcement message.")
+                else:
+                    ok_bc, res_bc = api_request(
+                        "POST",
+                        f"/api/growth/{biz_id}/broadcast",
+                        json_body={
+                            "segment": bc_seg,
+                            "topic": bc_topic.strip(),
+                            "promo_code": bc_promo.strip() or None,
+                            "auto_execute": bc_auto,
+                        },
+                    )
+                    if ok_bc:
+                        st.success(
+                            f"Broadcast status: `{res_bc['status']}` • "
+                            f"Targeted {res_bc['targeted_customers']} customer(s)."
+                        )
+                        st.info(res_bc["sample_message"])
+                    else:
+                        st.error(res_bc)
+
+        with tr_col, st.form("translate_copy_form"):
+            st.subheader("🌍 Neighborhood Language Translator")
+            tr_lang = st.selectbox("Target Language", ["Hindi", "Hinglish", "Spanish", "French"])
+            tr_txt = st.text_area(
+                "Copy to Localize*",
+                placeholder="Enjoy 15% off weekend pickup with code LOCAL15!",
+                height=100,
+            )
+            if st.form_submit_button("Localize Copy"):
+                if tr_txt.strip():
+                    ok_tr, res_tr = api_request(
+                        "POST",
+                        f"/api/growth/{biz_id}/translate",
+                        json_body={"text": tr_txt.strip(), "target_language": tr_lang},
+                    )
+                    if ok_tr:
+                        st.success(res_tr["translated_text"])
+                        st.caption(res_tr["notes"])
+                    else:
+                        st.error(res_tr)
+
+    with tab_faqs:
+        st.caption(
+            "These FAQs ground your WhatsApp Concierge so customers get exact shop-verified answers."
+        )
+        if st.button("✨ Auto-Suggest & Apply Shop FAQs", type="primary"):
+            ok_sug, res_sug = api_request("POST", f"/api/growth/{biz_id}/faqs/suggest?apply=true")
+            if ok_sug:
+                st.success(f"Applied {len(res_sug['faqs'])} grounded FAQs!")
+                st.rerun()
+            else:
+                st.error(res_sug)
+
+        ok_fq, faqs = api_request("GET", f"/api/growth/{biz_id}/faqs")
+        faq_list = faqs if ok_fq and isinstance(faqs, list) else []
+        for idx_fq, fq in enumerate(faq_list):
+            fc1, fc2 = st.columns([4, 0.8])
+            fc1.markdown(f"**Q:** {fq['q']}\n\n**A:** {fq['a']}")
+            if fc2.button("Del", key=f"del_faq_{biz_id}_{idx_fq}"):
+                updated_faqs = [f for i, f in enumerate(faq_list) if i != idx_fq]
+                api_request("PUT", f"/api/growth/{biz_id}/faqs", json_body={"faqs": updated_faqs})
+                st.rerun()
+            st.divider()
+
+        with st.form("add_faq_form"):
+            st.markdown("**➕ Add Custom Concierge FAQ**")
+            nq = st.text_input(
+                "Question*", placeholder="Do you offer gluten-free dough or parking?"
+            )
+            na = st.text_area("Answer*", placeholder="Yes, validated parking behind 2nd St.")
+            if st.form_submit_button("Save FAQ"):
+                if nq.strip() and na.strip():
+                    faq_list.append({"q": nq.strip(), "a": na.strip()})
+                    ok_sf, _ = api_request(
+                        "PUT", f"/api/growth/{biz_id}/faqs", json_body={"faqs": faq_list}
+                    )
+                    if ok_sf:
+                        st.success("FAQ saved to concierge knowledge base!")
+                        st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# PAGE 9: Customer Storefront & Catalog
 # ---------------------------------------------------------------------------
 
 elif page == "🌐 Customer Storefront" and selected_business:
@@ -1753,12 +2059,14 @@ elif page == "🌐 Customer Storefront" and selected_business:
     render_header(selected_business, "Public Customer Storefront & Menu / Services Catalog")
 
     store_url = f"{API_BASE_URL}/site/{biz_id}"
+    menu_url = f"{API_BASE_URL}/site/{biz_id}/menu"
     poster_url = f"{API_BASE_URL}/site/{biz_id}/poster"
     qr_url = f"{API_BASE_URL}/site/{biz_id}/qr"
     st.success(
         f"🌐 **Your Live Customer Booking, Order & Review Page:** [{store_url}]({store_url})"
     )
     st.markdown(
+        f"📋 **Printable Digital Menu:** [{menu_url}]({menu_url}) &nbsp;|&nbsp; "
         f"🖨️ **Printable Counter QR Poster:** [{poster_url}]({poster_url}) &nbsp;|&nbsp; "
         f"📱 **QR Code (SVG):** [{qr_url}]({qr_url})"
     )

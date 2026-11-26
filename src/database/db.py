@@ -55,9 +55,30 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
+def _sync_sqlite_columns(sync_conn) -> None:
+    """Safely add newly introduced columns on pre-existing SQLite tables if absent."""
+    if not str(sync_conn.engine.url).startswith("sqlite"):
+        return
+    cols = {row[1] for row in sync_conn.exec_driver_sql("PRAGMA table_info(order_requests)")}
+    if cols:
+        if "subtotal_amount" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE order_requests ADD COLUMN subtotal_amount FLOAT NOT NULL DEFAULT 0.0"
+            )
+        if "discount_amount" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE order_requests ADD COLUMN discount_amount FLOAT NOT NULL DEFAULT 0.0"
+            )
+        if "promo_code" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE order_requests ADD COLUMN promo_code VARCHAR(40)"
+            )
+
+
 async def init_db() -> None:
-    """Create all database tables defined on Base.metadata."""
+    """Create all database tables defined on Base.metadata and apply additive SQLite migrations."""
     import src.models  # noqa: F401 - ensures all ORM models are registered
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_sync_sqlite_columns)

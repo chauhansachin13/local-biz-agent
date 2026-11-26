@@ -14,6 +14,7 @@ from src.api import (
     booking_routes,
     business_routes,
     crm_routes,
+    growth_routes,
     order_routes,
     review_routes,
     social_routes,
@@ -48,6 +49,7 @@ api_router.include_router(review_routes.router)
 api_router.include_router(booking_routes.router)
 api_router.include_router(order_routes.router)
 api_router.include_router(crm_routes.router)
+api_router.include_router(growth_routes.router)
 api_router.include_router(agent_routes.router)
 api_router.include_router(whatsapp_routes.router)
 api_router.include_router(storefront_routes.router)

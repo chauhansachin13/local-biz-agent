@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.booking_agent import BookingAgent
+from src.agents.revenue_and_growth import notify_waitlist_for_cancelled_booking
 from src.api.deps import get_business_or_404
 from src.database import get_db
 from src.models.api_schemas import AvailabilityResponse, BookingCreateRequest
@@ -129,6 +130,9 @@ async def update_booking(
     for field, value in updates.items():
         setattr(booking, field, value)
 
+    if new_status == BookingStatus.CANCELLED:
+        await notify_waitlist_for_cancelled_booking(db, business, booking)
+
     await db.commit()
     await db.refresh(booking)
     return booking
@@ -140,8 +144,8 @@ async def cancel_booking(
     booking_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> Booking:
-    """Cancel a booking by updating its status to CANCELLED."""
-    await get_business_or_404(db, business_id)
+    """Cancel a booking by updating its status to CANCELLED and alert waiting waitlist guests."""
+    business = await get_business_or_404(db, business_id)
     stmt = select(Booking).where(
         Booking.id == booking_id,
         Booking.business_id == business_id,
@@ -154,6 +158,7 @@ async def cancel_booking(
         )
 
     booking.status = BookingStatus.CANCELLED
+    await notify_waitlist_for_cancelled_booking(db, business, booking)
     await db.commit()
     await db.refresh(booking)
     return booking

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.agents.revenue_and_growth import validate_and_compute_discount
 from src.api.deps import get_business_or_404
 from src.database import get_db
 from src.models.agent_models import (
@@ -29,10 +30,23 @@ async def create_order(
     payload: OrderCreateRequest,
     db: AsyncSession = Depends(get_db),
 ) -> OrderRequest:
-    """Create an online pickup, delivery, or dine-in order for a local business."""
+    """Create an online pickup, delivery, or dine-in order with server-side coupon validation."""
     await get_business_or_404(db, business_id)
     items_dicts = [item.model_dump() for item in payload.items]
-    total = round(sum(item.price * item.quantity for item in payload.items), 2)
+    subtotal = round(sum(item.price * item.quantity for item in payload.items), 2)
+    discount = 0.0
+    applied_code: str | None = None
+
+    if payload.promo_code and payload.promo_code.strip():
+        check = await validate_and_compute_discount(
+            db, business_id, payload.promo_code, subtotal, increment_use=True
+        )
+        if not check["valid"]:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=check["reason"])
+        discount = float(check["discount_amount"])
+        applied_code = str(check["code"])
+
+    total = round(max(0.0, subtotal - discount), 2)
 
     order = OrderRequest(
         business_id=business_id,
@@ -40,6 +54,9 @@ async def create_order(
         customer_phone=payload.customer_phone,
         customer_email=payload.customer_email,
         items=items_dicts,
+        subtotal_amount=subtotal,
+        discount_amount=discount,
+        promo_code=applied_code,
         total_amount=total,
         fulfillment_type=payload.fulfillment_type,
         status=OrderStatus.NEW,

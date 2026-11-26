@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.agents.health_and_growth import get_or_create_agent_config
 from src.api.deps import get_business_or_404
 from src.database import get_db
+from src.models.growth_models import CouponOffer, DiscountType
 from src.models.review import Review
 from src.utils.visuals import generate_qr_svg
 
@@ -84,12 +85,103 @@ async def storefront_printable_poster(
     return HTMLResponse(content=poster_html)
 
 
+@router.get("/site/{business_id}/menu", response_class=HTMLResponse)
+async def storefront_printable_menu(
+    business_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> HTMLResponse:
+    """Render a print-ready digital menu / price list with active promo codes and QR."""
+    business = await get_business_or_404(db, business_id)
+    cfg = await get_or_create_agent_config(db, business_id)
+    coupons = list(
+        (
+            await db.execute(
+                select(CouponOffer).where(
+                    CouponOffer.business_id == business_id,
+                    CouponOffer.is_active.is_(True),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    await db.commit()
+
+    base_url = str(request.base_url).rstrip("/")
+    store_url = f"{base_url}/site/{business_id}"
+    svg_qr = generate_qr_svg(store_url)
+    name_esc = html.escape(business.name)
+    cat_esc = html.escape(business.category.title())
+    city_esc = html.escape(business.city or "Local Community")
+
+    items_html = ""
+    for item in cfg.catalog_items or []:
+        iname = html.escape(str(item.get("name", "Item")))
+        idesc = html.escape(str(item.get("description", "")))
+        iprice = float(item.get("price", 0.0) or 0.0)
+        items_html += (
+            f'<div class="row"><div><strong>{iname}</strong>'
+            f'<div class="muted">{idesc}</div></div>'
+            f'<div class="price">${iprice:.2f}</div></div>'
+        )
+
+    today = date.today()
+    live_coupons = [c for c in coupons if c.valid_until is None or c.valid_until >= today]
+    promo_html = "".join(
+        f'<span class="coupon">🎟️ <strong>{html.escape(c.code)}</strong>: '
+        f"{int(c.discount_value)}% off"
+        if c.discount_type == DiscountType.PERCENT
+        else f'<span class="coupon">🎟️ <strong>{html.escape(c.code)}</strong>: ${c.discount_value:.2f} off'
+        + f" — {html.escape(c.title)}</span>"
+        for c in live_coupons
+    )
+
+    menu_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>{name_esc} — Digital Menu & Services</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f1f5f9; margin: 0; padding: 2rem; color: #0f172a; }}
+    .sheet {{ max-width: 720px; margin: 0 auto; background: #fff; border-radius: 18px; padding: 2rem; box-shadow: 0 10px 30px rgba(15,23,42,0.1); }}
+    .top {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 1rem; margin-bottom: 1.25rem; gap: 1rem; }}
+    .qr {{ width: 110px; height: 110px; flex-shrink: 0; }}
+    .qr svg {{ width: 100%; height: 100%; }}
+    .row {{ display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0; border-bottom: 1px solid #f1f5f9; }}
+    .price {{ font-weight: 800; color: #1d4ed8; font-size: 1.05rem; margin-left: 1rem; white-space: nowrap; }}
+    .muted {{ color: #64748b; font-size: 0.88rem; }}
+    .coupon {{ display: inline-block; background: #dcfce7; color: #166534; padding: 0.35rem 0.75rem; border-radius: 999px; font-size: 0.85rem; margin: 0.25rem 0.35rem 0.25rem 0; }}
+    @media print {{ body {{ background: #fff; padding: 0; }} .no-print {{ display: none; }} }}
+    button {{ background: #1e3a8a; color: #fff; border: none; padding: 0.65rem 1.2rem; border-radius: 10px; font-weight: 600; cursor: pointer; margin-top: 1rem; }}
+  </style>
+</head>
+<body>
+  <div class="sheet">
+    <div class="top">
+      <div>
+        <div class="muted">{cat_esc} • {city_esc}</div>
+        <h1 style="margin:0.2rem 0;">{name_esc}</h1>
+        <div class="muted">Scan QR or visit {html.escape(store_url)} to book & order online</div>
+      </div>
+      <div class="qr">{svg_qr}</div>
+    </div>
+    {f'<div style="margin-bottom:1rem;">{promo_html}</div>' if promo_html else ""}
+    <h2 style="margin-top:0.5rem;">🛍️ Menu & Price List</h2>
+    {items_html or '<p class="muted">Contact us for today’s specials.</p>'}
+    <button class="no-print" onclick="window.print()">🖨️ Print Menu Card</button>
+  </div>
+</body>
+</html>"""
+    return HTMLResponse(content=menu_html)
+
+
 @router.get("/site/{business_id}", response_class=HTMLResponse)
 async def public_business_storefront(
     business_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> HTMLResponse:
-    """Serve a shareable, mobile-friendly public storefront with bookings, orders, and reviews."""
+    """Serve a shareable, mobile-friendly public storefront with bookings, orders, coupons, waitlist, and reviews."""
     business = await get_business_or_404(db, business_id)
     cfg = await get_or_create_agent_config(db, business_id)
     reviews = list(
@@ -99,6 +191,18 @@ async def public_business_storefront(
                 .where(Review.business_id == business_id)
                 .order_by(Review.rating.desc(), Review.created_at.desc())
                 .limit(5)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    coupons = list(
+        (
+            await db.execute(
+                select(CouponOffer).where(
+                    CouponOffer.business_id == business_id,
+                    CouponOffer.is_active.is_(True),
+                )
             )
         )
         .scalars()
@@ -163,6 +267,23 @@ async def public_business_storefront(
         )
 
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    today_date = date.today()
+    live_coupons = [
+        c
+        for c in coupons
+        if (c.valid_until is None or c.valid_until >= today_date) and c.uses_count < c.max_uses
+    ]
+    coupon_pills = "".join(
+        f'<span class="badge" style="background:#f59e0b;color:#0f172a;margin:0.25rem;">🎟️ Code {html.escape(c.code)} — '
+        + (
+            f"{int(c.discount_value)}% OFF"
+            if c.discount_type == DiscountType.PERCENT
+            else f"${c.discount_value:.2f} OFF"
+        )
+        + (f" (min ${c.min_order_amount:.0f})" if c.min_order_amount > 0 else "")
+        + "</span>"
+        for c in live_coupons[:3]
+    )
 
     page_html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -202,6 +323,7 @@ async def public_business_storefront(
     <h1>{name_esc}</h1>
     <p>{cat_esc} • 📍 {loc_esc} • 📞 {phone_esc} • ★ {avg_rating}/5</p>
     <p style="max-width:680px;margin:0.5rem auto 0;opacity:0.9;">{desc_esc}</p>
+    {f'<div style="margin-top:0.85rem;">{coupon_pills}</div>' if coupon_pills else ""}
   </header>
 
   <main class="container">
@@ -242,6 +364,12 @@ async def public_business_storefront(
           <label>Quantity *</label><input id="ordQty" type="number" min="1" max="20" value="1" required />
           <label>Fulfillment</label>
           <select id="ordType"><option value="pickup">Store Pickup</option><option value="delivery">Local Delivery</option><option value="dine_in">Dine-In</option></select>
+          <label>Promo Code (optional)</label>
+          <div style="display:flex;gap:0.5rem;align-items:center;">
+            <input id="ordPromo" placeholder="e.g., LOCAL15" style="margin-top:0.2rem;flex:1;" />
+            <button type="button" onclick="checkPromoCode()" style="width:auto;margin-top:0.2rem;padding:0.55rem 0.9rem;background:#0f172a;">Apply</button>
+          </div>
+          <div id="promoPreview" class="muted" style="margin-top:0.25rem;"></div>
           <label>Notes</label><textarea id="ordNotes" rows="2" placeholder="Any preferences..."></textarea>
           <button type="submit">Submit Order</button>
           <div id="ordMsg" class="msg"></div>
@@ -249,7 +377,26 @@ async def public_business_storefront(
       </section>
     </div>
 
-    <section class="card" id="review">
+    <div class="grid-2">
+      <section class="card" id="waitlist">
+        <h2>⏰ Preferred Slot Full? Join the Waitlist</h2>
+        <p class="muted">We'll alert you automatically on WhatsApp the moment a cancellation opens up!</p>
+        <form id="waitlistForm">
+          <div class="grid-2">
+            <div><label>Your Name *</label><input id="wlName" required placeholder="Priya" /></div>
+            <div><label>WhatsApp Phone *</label><input id="wlPhone" required placeholder="+1-555-0188" /></div>
+          </div>
+          <div class="grid-2">
+            <div><label>Preferred Date *</label><input id="wlDate" type="date" value="{tomorrow}" required /></div>
+            <div><label>Preferred Time *</label><input id="wlTime" type="time" value="18:00" required /></div>
+          </div>
+          <label>Service / Party Size</label><input id="wlService" value="Table / Standard Visit" />
+          <button type="submit" style="background:#0f172a;">Join Instant Waitlist</button>
+          <div id="wlMsg" class="msg"></div>
+        </form>
+      </section>
+
+      <section class="card" id="review">
       <h2>⭐ Leave Us a Customer Review</h2>
       <form id="reviewForm">
         <div class="grid-2">
@@ -270,11 +417,32 @@ async def public_business_storefront(
         <button type="submit">Submit Review</button>
         <div id="revMsg" class="msg"></div>
       </form>
-    </section>
+      </section>
+    </div>
   </main>
 
   <script>
     const BIZ_ID = {business_id};
+    async function checkPromoCode() {{
+      const code = document.getElementById('ordPromo').value.trim();
+      const preview = document.getElementById('promoPreview');
+      if (!code) {{ preview.textContent = ''; return; }}
+      const sel = document.getElementById('ordItem');
+      const opt = sel.options[sel.selectedIndex];
+      const qty = parseInt(document.getElementById('ordQty').value || '1', 10);
+      const price = parseFloat(opt.getAttribute('data-price') || '0');
+      const subtotal = qty * price;
+      const resp = await fetch(`/api/growth/${{BIZ_ID}}/coupons/validate`, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ code, subtotal }})
+      }});
+      const data = await resp.json();
+      preview.style.color = data.valid ? '#166534' : '#991b1b';
+      preview.textContent = data.valid
+        ? `${{data.reason}} New total: $${{data.final_total.toFixed(2)}}`
+        : data.reason;
+    }}
     document.getElementById('bookingForm').addEventListener('submit', async (e) => {{
       e.preventDefault();
       const msg = document.getElementById('bkMsg');
@@ -315,6 +483,7 @@ async def public_business_storefront(
           customer_name: document.getElementById('ordName').value,
           customer_phone: document.getElementById('ordPhone').value,
           fulfillment_type: document.getElementById('ordType').value,
+          promo_code: document.getElementById('ordPromo').value.trim() || null,
           notes: document.getElementById('ordNotes').value || null,
           items: [{{
             name: opt.value,
@@ -326,10 +495,36 @@ async def public_business_storefront(
       const data = await resp.json();
       if (resp.ok) {{
         msg.className = 'msg ok';
-        msg.textContent = `Order #${{data.id}} received! Total: $${{data.total_amount.toFixed(2)}}`;
+        const discText = data.discount_amount > 0 ? ` (Saved $${{data.discount_amount.toFixed(2)}}!)` : '';
+        msg.textContent = `Order #${{data.id}} received! Total: $${{data.total_amount.toFixed(2)}}${{discText}}`;
       }} else {{
         msg.className = 'msg err';
         msg.textContent = data.detail || 'Could not place order.';
+      }}
+    }});
+
+    document.getElementById('waitlistForm').addEventListener('submit', async (e) => {{
+      e.preventDefault();
+      const msg = document.getElementById('wlMsg');
+      msg.className = 'msg';
+      const resp = await fetch(`/api/growth/${{BIZ_ID}}/waitlist`, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{
+          customer_name: document.getElementById('wlName').value,
+          customer_phone: document.getElementById('wlPhone').value,
+          preferred_date: document.getElementById('wlDate').value,
+          preferred_time: document.getElementById('wlTime').value.slice(0, 5),
+          service: document.getElementById('wlService').value || 'Reservation'
+        }})
+      }});
+      const data = await resp.json();
+      if (resp.ok) {{
+        msg.className = 'msg ok';
+        msg.textContent = `Added to waitlist (#${{data.id}}) for ${{data.preferred_date}} at ${{data.preferred_time}}!`;
+      }} else {{
+        msg.className = 'msg err';
+        msg.textContent = data.detail || 'Could not join waitlist.';
       }}
     }});
 

@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.agents.booking_agent import BookingAgent
 from src.agents.health_and_growth import compute_health_score, get_or_create_agent_config
 from src.agents.llm_client import generate_text_with_llm
+from src.agents.revenue_and_growth import compute_revenue_analytics
 from src.agents.review_agent import ReviewAgent
 from src.agents.social_agent import SocialMediaAgent
 from src.models.agent_models import (
@@ -80,6 +81,10 @@ _INTENT_RULES: list[tuple[str, tuple[str, ...]]] = [
     ("booking_manage", ("book", "booking", "appointment", "reservation", "slot", "availability")),
     ("order_manage", ("order", "orders", "delivery", "pickup", "takeaway", "menu")),
     ("google_profile", ("google", "gbp", "profile", "hours", "seo", "insights", "maps")),
+    (
+        "revenue_roi",
+        ("revenue", "roi", "sales", "coupon", "coupons", "promo", "waitlist", "top seller"),
+    ),
     (
         "analytics_overview",
         ("summary", "overview", "status", "analytics", "performance", "metrics", "health", "audit"),
@@ -190,6 +195,7 @@ async def run_supervisor_turn(
                     "booking_manage",
                     "order_manage",
                     "google_profile",
+                    "revenue_roi",
                     "analytics_overview",
                     "general",
                 }
@@ -624,6 +630,40 @@ async def run_supervisor_turn(
                     f"**Website Clicks:** {summary.get('website_clicks', 'N/A')}"
                 )
 
+            elif step == "revenue_roi":
+                rev_data = await compute_revenue_analytics(db, business)
+                data["revenue_analytics"] = rev_data
+                trace.append(
+                    {
+                        "agent": "RevenueGrowthAgent",
+                        "tool": "compute_revenue_analytics",
+                        "status": "completed",
+                        "detail": (
+                            f"Estimated total revenue ${rev_data['total_estimated_revenue']:.2f} "
+                            f"({rev_data['total_orders']} orders, {rev_data['active_coupons']} active coupons)."
+                        ),
+                    }
+                )
+                top_item_str = (
+                    ", ".join(
+                        f"{t['name']} ({t['units_sold']}×)"
+                        for t in rev_data["top_ordered_items"][:3]
+                    )
+                    or "No items ordered yet"
+                )
+                sections.append(
+                    f"**Revenue & Growth ROI for {business.name}:**\n\n"
+                    f"- **Net Online Order Revenue:** ${rev_data['net_order_revenue']:.2f} "
+                    f"(Discounts given: ${rev_data['total_discounts_given']:.2f}, AOV: ${rev_data['average_order_value']:.2f})\n"
+                    f"- **Estimated Booking Revenue:** ${rev_data['estimated_booking_revenue']:.2f} "
+                    f"({rev_data['total_active_bookings']} active bookings)\n"
+                    f"- **Total Estimated Revenue:** **${rev_data['total_estimated_revenue']:.2f}**\n"
+                    f"- **Repeat Customer Rate:** {rev_data['repeat_customer_rate_pct']}% • "
+                    f"**Active Coupons:** {rev_data['active_coupons']} ({rev_data['total_coupon_redemptions']} uses)\n"
+                    f"- **Waitlist Guests Waiting:** {rev_data['waitlist_waiting_count']}\n"
+                    f"- **Top Items:** {top_item_str}"
+                )
+
             elif step == "analytics_overview":
                 reviews = list(
                     (await db.execute(select(Review).where(Review.business_id == business.id)))
@@ -1035,6 +1075,33 @@ async def decide_approval_action(
                     agent_used="LoyaltyRetentionAgent (Approved)",
                 )
             )
+            payload["content"] = msg_text
+
+    elif action.action_type == "broadcast_offer":
+        msg_text = (edited_content or payload.get("content") or "").strip()
+        recipients = list(payload.get("recipients") or [])
+        segment = str(payload.get("segment") or "All")
+        if msg_text:
+            for rec in recipients[:50]:
+                cname = str(rec.get("name") or "Friend")
+                cphone = str(rec.get("contact") or "crm-on-file")
+                first = cname.split()[0] if cname else "Friend"
+                personal = (
+                    f"Hi {first}, {msg_text[0].lower() + msg_text[1:]}"
+                    if len(msg_text) > 1
+                    else msg_text
+                )
+                db.add(
+                    WhatsAppMessage(
+                        business_id=business.id,
+                        sender_phone=cphone,
+                        sender_name=cname,
+                        sender_role="assistant",
+                        direction="outbound",
+                        message_text=personal,
+                        agent_used=f"BroadcastAgent ({segment} • Approved)",
+                    )
+                )
             payload["content"] = msg_text
 
     action.payload = payload

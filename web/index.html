@@ -107,6 +107,7 @@
     <button class="nav-btn" data-tab="approvals" onclick="showTab('approvals', this)">🤖 HITL Approval Inbox <span id="apBadge" class="badge b-med">0</span></button>
     <button class="nav-btn" data-tab="whatsapp" onclick="showTab('whatsapp', this)">📱 WhatsApp Concierge</button>
     <button class="nav-btn" data-tab="crm" onclick="showTab('crm', this)">👥 CRM & Competitors</button>
+    <button class="nav-btn" data-tab="growth" onclick="showTab('growth', this)">💰 Growth, Coupons & ROI</button>
     <button class="nav-btn" data-tab="storefront" onclick="showTab('storefront', this)">🌐 Storefront & QR</button>
     <div style="margin-top:auto; padding-top:0.8rem; border-top:1px solid var(--border);">
       <label>Backend API URL</label>
@@ -237,6 +238,53 @@
       </div>
     </section>
 
+    <!-- GROWTH, COUPONS, WAITLIST & FAQ -->
+    <section id="tab-growth" style="display:none;">
+      <div class="grid-4" id="growthKpis"></div>
+      <div class="grid-2">
+        <div class="card">
+          <h3 style="margin-top:0;">🎟️ Promo Coupons Engine</h3>
+          <div class="grid-2">
+            <div><label>Code *</label><input id="cpCode" placeholder="SAVE20" /></div>
+            <div><label>Title *</label><input id="cpTitle" placeholder="20% Weekend Treat" /></div>
+            <div><label>Type</label><select id="cpType"><option value="percent">Percent (%)</option><option value="fixed">Fixed ($)</option></select></div>
+            <div><label>Value *</label><input id="cpVal" type="number" value="20" min="1" /></div>
+          </div>
+          <label>Min Order ($)</label><input id="cpMin" type="number" value="15" min="0" />
+          <button class="btn success" onclick="createCoupon()">➕ Create Coupon</button>
+          <div id="couponsList" style="margin-top:0.9rem;"></div>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0;">📣 Segmented Customer Broadcast</h3>
+          <div class="grid-2">
+            <div><label>Audience Segment</label><select id="bcSeg"><option value="All">All Customers</option><option value="VIP">VIP Only</option><option value="Regular">Regular</option><option value="New">New</option></select></div>
+            <div><label>Attach Promo Code</label><input id="bcCode" placeholder="Optional e.g. LOCAL15" /></div>
+          </div>
+          <label>Campaign Message / Offer *</label>
+          <input id="bcTopic" placeholder="Fresh weekend tasting menu now open!" />
+          <label style="display:flex;align-items:center;gap:0.45rem;margin-bottom:0.75rem;">
+            <input type="checkbox" id="bcAuto" style="width:auto;margin:0;" />
+            Send Immediately (Unchecked = Queue in HITL Approval Inbox)
+          </label>
+          <button class="btn" onclick="launchBroadcast()">🚀 Launch Broadcast</button>
+          <div id="bcResult" style="margin-top:0.85rem;"></div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h3 style="margin-top:0;">⏰ Booking Waitlist & Top Sellers</h3>
+          <div id="waitlistBox"></div>
+        </div>
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
+            <h3 style="margin-top:0;">📚 Concierge FAQ Knowledge Base</h3>
+            <button class="btn secondary" onclick="autoSuggestFaqs()">✨ Auto-Suggest FAQs</button>
+          </div>
+          <div id="faqsList" style="margin-top:0.75rem;"></div>
+        </div>
+      </div>
+    </section>
+
     <!-- STOREFRONT & QR -->
     <section id="tab-storefront" style="display:none;">
       <div class="card">
@@ -268,6 +316,15 @@
       ],
       competitors: [
         { name: "Downtown Bistro", rating: 4.1, review_count: 110, price_tier: "$$", weaknesses: "Long weekend wait times" }
+      ],
+      coupons: [
+        { id: 1, code: "LOCAL15", title: "15% off Weekend Pickup", discount_type: "percent", discount_value: 15, min_order_amount: 15, uses_count: 1, max_uses: 200, is_active: true }
+      ],
+      waitlist: [
+        { id: 1, customer_name: "Elena Rostova", preferred_date: "2026-11-27", preferred_time: "19:30", service: "Dinner Table (4 Guests)", status: "waiting" }
+      ],
+      faqs: [
+        { q: "Do you offer promo codes or loyalty rewards?", a: "Yes! Use code LOCAL15 at checkout for 15% off pickup orders." }
       ],
       waMessages: []
     };
@@ -358,6 +415,7 @@
       await loadApprovals();
       await loadWhatsAppHistory();
       await loadCRM();
+      await loadGrowth();
       renderStorefrontTab();
     }
 
@@ -374,6 +432,7 @@
         approvals: 'Human-in-the-Loop Approval Inbox',
         whatsapp: 'WhatsApp Business Concierge',
         crm: 'Customer CRM, Loyalty & Competitors',
+        growth: 'Revenue ROI, Coupons, Waitlist & Broadcasts',
         storefront: 'Customer Storefront & Printable QR'
       };
       document.getElementById('pageTitle').textContent = titles[name] || 'BizPresence AI';
@@ -661,20 +720,103 @@
       await refreshActiveBusiness();
     }
 
+    async function loadGrowth() {
+      const rev = LIVE_MODE
+        ? (await apiFetch(`/api/growth/${ACTIVE_BIZ_ID}/revenue-analytics`) || {})
+        : { total_estimated_revenue: 326, net_order_revenue: 46, repeat_customer_rate_pct: 66.7, active_coupons: SANDBOX_DB.coupons.length, waitlist_waiting_count: SANDBOX_DB.waitlist.length, top_ordered_items: [{ name: "Margherita Pizza", units_sold: 2, gross_revenue: 36 }] };
+      document.getElementById('growthKpis').innerHTML = `
+        <div class="card"><div class="muted">Est. Total Revenue</div><div class="metric-val">$${Number(rev.total_estimated_revenue || 0).toFixed(2)}</div></div>
+        <div class="card"><div class="muted">Net Order Revenue</div><div class="metric-val">$${Number(rev.net_order_revenue || 0).toFixed(2)}</div></div>
+        <div class="card"><div class="muted">Repeat Rate</div><div class="metric-val">${rev.repeat_customer_rate_pct || 0}%</div></div>
+        <div class="card"><div class="muted">Active Coupons</div><div class="metric-val">${rev.active_coupons || 0}</div></div>
+      `;
+
+      const coupons = LIVE_MODE ? (await apiFetch(`/api/growth/${ACTIVE_BIZ_ID}/coupons`) || []) : SANDBOX_DB.coupons;
+      document.getElementById('couponsList').innerHTML = coupons.map(c => {
+        const valStr = c.discount_type === 'percent' ? `${c.discount_value}% OFF` : `$${Number(c.discount_value).toFixed(2)} OFF`;
+        return `<div class="trace-box"><strong>${escapeHtml(c.code)}</strong> — ${escapeHtml(valStr)} (${escapeHtml(c.title)}) • Used ${c.uses_count}/${c.max_uses}</div>`;
+      }).join('') || '<div class="muted">No promo coupons yet.</div>';
+
+      const wl = LIVE_MODE ? (await apiFetch(`/api/growth/${ACTIVE_BIZ_ID}/waitlist`) || []) : SANDBOX_DB.waitlist;
+      const topHtml = (rev.top_ordered_items || []).map(t => `<div>• <strong>${escapeHtml(t.name)}</strong> (${t.units_sold} sold — $${Number(t.gross_revenue).toFixed(2)})</div>`).join('') || '<div class="muted">No item sales yet.</div>';
+      const wlHtml = wl.map(w => `<div class="trace-box"><strong>${escapeHtml(w.customer_name)}</strong> (${escapeHtml(w.preferred_date)} @ ${escapeHtml(w.preferred_time)}) — <span class="badge b-med">${escapeHtml(w.status)}</span></div>`).join('') || '<div class="muted">Waitlist empty.</div>';
+      document.getElementById('waitlistBox').innerHTML = `<div style="margin-bottom:0.85rem;"><strong>Top Menu Items:</strong>${topHtml}</div><strong>Waitlist Entries:</strong>${wlHtml}`;
+
+      const faqs = LIVE_MODE ? (await apiFetch(`/api/growth/${ACTIVE_BIZ_ID}/faqs`) || []) : SANDBOX_DB.faqs;
+      document.getElementById('faqsList').innerHTML = faqs.map(f => `<div class="trace-box"><strong>Q: ${escapeHtml(f.q)}</strong><div class="muted">${escapeHtml(f.a)}</div></div>`).join('') || '<div class="muted">No FAQs configured. Click Auto-Suggest above!</div>';
+    }
+
+    async function createCoupon() {
+      const payload = {
+        code: document.getElementById('cpCode').value.trim(),
+        title: document.getElementById('cpTitle').value.trim(),
+        discount_type: document.getElementById('cpType').value,
+        discount_value: parseFloat(document.getElementById('cpVal').value || '10'),
+        min_order_amount: parseFloat(document.getElementById('cpMin').value || '0')
+      };
+      if (!payload.code || !payload.title) return alert('Enter coupon code and title.');
+      if (LIVE_MODE) {
+        try {
+          await apiRequestStrict(`/api/growth/${ACTIVE_BIZ_ID}/coupons`, { method: 'POST', body: JSON.stringify(payload) });
+        } catch (err) {
+          alert(`Coupon error: ${err.message}`);
+          return;
+        }
+      } else {
+        SANDBOX_DB.coupons.unshift({ id: Date.now(), ...payload, code: payload.code.toUpperCase(), uses_count: 0, max_uses: 100 });
+      }
+      document.getElementById('cpCode').value = '';
+      document.getElementById('cpTitle').value = '';
+      await loadGrowth();
+    }
+
+    async function launchBroadcast() {
+      const topic = document.getElementById('bcTopic').value.trim();
+      if (!topic) return alert('Enter campaign announcement.');
+      const payload = {
+        segment: document.getElementById('bcSeg').value,
+        topic,
+        promo_code: document.getElementById('bcCode').value.trim() || null,
+        auto_execute: document.getElementById('bcAuto').checked
+      };
+      let res;
+      if (LIVE_MODE) {
+        try {
+          res = await apiRequestStrict(`/api/growth/${ACTIVE_BIZ_ID}/broadcast`, { method: 'POST', body: JSON.stringify(payload) });
+        } catch (err) {
+          document.getElementById('bcResult').innerHTML = `<div class="trace-box" style="border-color:var(--red);">❌ ${escapeHtml(err.message)}</div>`;
+          return;
+        }
+      } else {
+        res = { targeted_customers: 3, status: payload.auto_execute ? 'sent' : 'queued_for_approval', sample_message: `${topic}` };
+      }
+      document.getElementById('bcResult').innerHTML = `<div class="trace-box">✅ <strong>${escapeHtml(res.status)}</strong> (${res.targeted_customers} recipient(s))<div class="muted">${renderRichText(res.sample_message)}</div></div>`;
+      await refreshActiveBusiness();
+    }
+
+    async function autoSuggestFaqs() {
+      if (LIVE_MODE) {
+        await apiRequestStrict(`/api/growth/${ACTIVE_BIZ_ID}/faqs/suggest?apply=true`, { method: 'POST' });
+      }
+      await loadGrowth();
+    }
+
     function renderStorefrontTab() {
       const storeUrl = `${API_BASE}/site/${ACTIVE_BIZ_ID}`;
       const posterUrl = `${API_BASE}/site/${ACTIVE_BIZ_ID}/poster`;
+      const menuUrl = `${API_BASE}/site/${ACTIVE_BIZ_ID}/menu`;
       const promoUrl = `${API_BASE}/api/social/${ACTIVE_BIZ_ID}/promo-card.png`;
       document.getElementById('storefrontLinks').innerHTML = LIVE_MODE ? `
         <p>Share these instant links with your local customers:</p>
         <div style="display:flex;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem;">
           <a class="btn" href="${storeUrl}" target="_blank">🌐 Open Customer Storefront</a>
+          <a class="btn secondary" href="${menuUrl}" target="_blank">📋 Printable Digital Menu</a>
           <a class="btn secondary" href="${posterUrl}" target="_blank">🖨️ Open Printable QR Poster</a>
           <a class="btn secondary" href="${promoUrl}" target="_blank">🎨 View Branded Promo PNG</a>
         </div>
         <img src="${promoUrl}" alt="Branded Promo PNG" style="max-width:340px;border-radius:14px;border:1px solid var(--border);" />
       ` : `
-        <p class="muted">Connect a live FastAPI backend URL in the bottom-left sidebar to open your live Python storefront (<code>/site/${ACTIVE_BIZ_ID}</code>), printable QR counter poster, and Pillow PNG promo generator.</p>
+        <p class="muted">Connect a live FastAPI backend URL in the bottom-left sidebar to open your live Python storefront (<code>/site/${ACTIVE_BIZ_ID}</code>), printable menu, QR counter poster, and Pillow PNG promo generator.</p>
       `;
     }
 

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -76,13 +77,18 @@ async def validation_exception_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
     """Return structured validation errors."""
+    status_code = getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422)
+    safe_errors = jsonable_encoder(
+        exc.errors(),
+        custom_encoder={Exception: str},
+    )
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status_code,
         content={
             "error": True,
-            "status_code": status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "status_code": status_code,
             "detail": "Validation error",
-            "errors": exc.errors(),
+            "errors": safe_errors,
             "path": str(request.url.path),
         },
     )

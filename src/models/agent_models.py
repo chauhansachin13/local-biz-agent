@@ -166,6 +166,9 @@ class OrderRequest(Base):
     customer_phone: Mapped[str] = mapped_column(String(30), nullable=False)
     customer_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     items: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    subtotal_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    discount_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    promo_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
     total_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     fulfillment_type: Mapped[FulfillmentType] = mapped_column(
         Enum(FulfillmentType, native_enum=False),
@@ -359,6 +362,7 @@ class OrderCreateRequest(BaseModel):
     customer_email: str | None = Field(default=None, max_length=255)
     items: list[OrderItemSchema] = Field(..., min_length=1)
     fulfillment_type: FulfillmentType = FulfillmentType.PICKUP
+    promo_code: str | None = Field(default=None, max_length=40)
     notes: str | None = None
 
 
@@ -380,6 +384,9 @@ class OrderResponse(BaseModel):
     customer_phone: str
     customer_email: str | None = None
     items: list[dict[str, Any]]
+    subtotal_amount: float = 0.0
+    discount_amount: float = 0.0
+    promo_code: str | None = None
     total_amount: float
     fulfillment_type: FulfillmentType
     status: OrderStatus

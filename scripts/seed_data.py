@@ -15,7 +15,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from config.settings import settings  # noqa: E402
-from src.database.db import Base  # noqa: E402
+from src.database.db import Base, _sync_sqlite_columns  # noqa: E402
 from src.models.agent_models import (  # noqa: E402
     AgentApprovalAction,
     AgentRunLog,
@@ -32,6 +32,12 @@ from src.models.agent_models import (  # noqa: E402
 )
 from src.models.booking import Booking, BookingStatus  # noqa: E402
 from src.models.business import Business  # noqa: E402
+from src.models.growth_models import (  # noqa: E402
+    CouponOffer,
+    DiscountType,
+    WaitlistEntry,
+    WaitlistStatus,
+)
 from src.models.review import ResponseStatus, Review, Sentiment  # noqa: E402
 from src.models.social_post import PostStatus, SocialPlatform, SocialPost  # noqa: E402
 
@@ -42,9 +48,13 @@ def seed_database(reset: bool = True) -> None:
     connect_args = {"check_same_thread": False} if sync_url.startswith("sqlite") else {}
     engine = create_engine(sync_url, connect_args=connect_args)
     Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        _sync_sqlite_columns(conn)
 
     with Session(engine) as db:
         if reset:
+            db.query(WaitlistEntry).delete()
+            db.query(CouponOffer).delete()
             db.query(WhatsAppMessage).delete()
             db.query(CompetitorBenchmark).delete()
             db.query(CustomerProfile).delete()
@@ -481,6 +491,9 @@ def seed_database(reset: bool = True) -> None:
                     {"name": "Wood-Fired Margherita Pizza", "quantity": 2, "price": 18.0},
                     {"name": "Classic Tiramisu", "quantity": 1, "price": 10.0},
                 ],
+                subtotal_amount=46.0,
+                discount_amount=0.0,
+                promo_code=None,
                 total_amount=46.0,
                 fulfillment_type=FulfillmentType.PICKUP,
                 status=OrderStatus.CONFIRMED,
@@ -491,6 +504,9 @@ def seed_database(reset: bool = True) -> None:
                 customer_name="Rachel Kim",
                 customer_phone="(206) 555-3002",
                 items=[{"name": "Botanical Scalp Ritual", "quantity": 1, "price": 55.0}],
+                subtotal_amount=55.0,
+                discount_amount=0.0,
+                promo_code=None,
                 total_amount=55.0,
                 fulfillment_type=FulfillmentType.PICKUP,
                 status=OrderStatus.NEW,
@@ -498,6 +514,57 @@ def seed_database(reset: bool = True) -> None:
             ),
         ]
         db.add_all(orders)
+
+        db.add_all(
+            [
+                CouponOffer(
+                    business_id=restaurant.id,
+                    code="LOCAL15",
+                    title="15% off Weekend Pickup Orders ($15+)",
+                    discount_type=DiscountType.PERCENT,
+                    discount_value=15.0,
+                    min_order_amount=15.0,
+                    max_uses=200,
+                    uses_count=1,
+                    valid_until=today + timedelta(days=30),
+                    is_active=True,
+                ),
+                CouponOffer(
+                    business_id=restaurant.id,
+                    code="WELCOME10",
+                    title="$10 off Family Feast ($40+)",
+                    discount_type=DiscountType.FIXED,
+                    discount_value=10.0,
+                    min_order_amount=40.0,
+                    max_uses=100,
+                    uses_count=0,
+                    valid_until=today + timedelta(days=45),
+                    is_active=True,
+                ),
+                CouponOffer(
+                    business_id=salon.id,
+                    code="GLOW20",
+                    title="20% off Self-Care Packages",
+                    discount_type=DiscountType.PERCENT,
+                    discount_value=20.0,
+                    min_order_amount=30.0,
+                    max_uses=100,
+                    uses_count=0,
+                    valid_until=today + timedelta(days=30),
+                    is_active=True,
+                ),
+                WaitlistEntry(
+                    business_id=restaurant.id,
+                    customer_name="Elena Rostova",
+                    customer_phone="(512) 555-8821",
+                    preferred_date=today + timedelta(days=1),
+                    preferred_time="19:30",
+                    service="Dinner Table (4 Guests)",
+                    status=WaitlistStatus.WAITING,
+                    notes="Patio preferred",
+                ),
+            ]
+        )
 
         neg_review = next(r for r in reviews if r.business_id == restaurant.id and r.rating == 2)
         db.flush()
