@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.agents.loyalty_and_engagement import earn_loyalty_points
 from src.agents.revenue_and_growth import validate_and_compute_discount
 from src.api.deps import get_business_or_404
 from src.database import get_db
@@ -63,6 +64,17 @@ async def create_order(
         notes=payload.notes,
     )
     db.add(order)
+    await db.flush()
+    if payload.customer_email and "@" in payload.customer_email and total >= 1.0:
+        await earn_loyalty_points(
+            db,
+            business_id,
+            payload.customer_email,
+            payload.customer_name,
+            max(1, int(round(total))),
+            description=f"Online order #{order.id} ({payload.fulfillment_type.value})",
+            reference_id=f"order:{order.id}",
+        )
     await db.commit()
     await db.refresh(order)
     return order

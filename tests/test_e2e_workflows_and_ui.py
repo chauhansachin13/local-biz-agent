@@ -290,7 +290,7 @@ def test_streamlit_dashboard_all_10_pages_with_live_backend_e2e(tmp_path: Path) 
 
                 nav_radio = next(r for r in at.sidebar.radio if len(r.options) >= 9)
                 pages = list(nav_radio.options)
-                assert len(pages) == 11
+                assert len(pages) == 14
 
                 for page_name in pages:
                     nav_radio = next(r for r in at.sidebar.radio if len(r.options) >= 9)

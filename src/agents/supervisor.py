@@ -15,6 +15,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.agents.booking_agent import BookingAgent
 from src.agents.health_and_growth import compute_health_score, get_or_create_agent_config
 from src.agents.llm_client import generate_text_with_llm
+from src.agents.loyalty_and_engagement import (
+    generate_content_calendar,
+    get_campaign_analytics,
+    get_content_calendar,
+    get_loyalty_analytics,
+    get_nps_analytics,
+    list_gift_cards,
+)
 from src.agents.revenue_and_growth import compute_revenue_analytics
 from src.agents.review_agent import ReviewAgent
 from src.agents.social_agent import SocialMediaAgent
@@ -86,6 +94,20 @@ _INTENT_RULES: list[tuple[str, tuple[str, ...]]] = [
         ("revenue", "roi", "sales", "coupon", "coupons", "promo", "waitlist", "top seller"),
     ),
     (
+        "loyalty_engagement",
+        (
+            "loyalty",
+            "points",
+            "gift card",
+            "giftcard",
+            "nps",
+            "survey",
+            "email campaign",
+            "newsletter",
+            "content calendar",
+        ),
+    ),
+    (
         "analytics_overview",
         ("summary", "overview", "status", "analytics", "performance", "metrics", "health", "audit"),
     ),
@@ -107,6 +129,24 @@ def _detect_intents_offline(low: str) -> list[str]:
             ):
                 continue
             matched.append(intent_name)
+    # Prevent 'content' in 'content calendar' or 'campaign' in 'email campaign' from spuriously triggering social_create
+    if "loyalty_engagement" in matched and "social_create" in matched:
+        explicit_social = any(
+            w in low
+            for w in (
+                "instagram",
+                "facebook",
+                "twitter",
+                "social",
+                "caption",
+                "hashtag",
+                "publish post",
+                "write post",
+                "create post",
+            )
+        )
+        if not explicit_social:
+            matched = [m for m in matched if m != "social_create"]
     return matched or ["general"]
 
 
@@ -169,7 +209,7 @@ async def run_supervisor_turn(
                 "You are an AI Supervisor Planner for a local business assistant. "
                 "Classify the user message into 1 to 3 ordered tasks from this exact list: "
                 "['social_create', 'review_respond', 'booking_manage', 'order_manage', "
-                "'google_profile', 'analytics_overview', 'general']. "
+                "'google_profile', 'revenue_roi', 'loyalty_engagement', 'analytics_overview', 'general']. "
                 'Reply ONLY with a JSON array of strings, e.g. ["social_create", "review_respond"].'
             ),
             user_prompt=(
@@ -196,6 +236,7 @@ async def run_supervisor_turn(
                     "order_manage",
                     "google_profile",
                     "revenue_roi",
+                    "loyalty_engagement",
                     "analytics_overview",
                     "general",
                 }
@@ -662,6 +703,71 @@ async def run_supervisor_turn(
                     f"**Active Coupons:** {rev_data['active_coupons']} ({rev_data['total_coupon_redemptions']} uses)\n"
                     f"- **Waitlist Guests Waiting:** {rev_data['waitlist_waiting_count']}\n"
                     f"- **Top Items:** {top_item_str}"
+                )
+
+            elif step == "loyalty_engagement":
+                loy_stats = await get_loyalty_analytics(db, business.id)
+                nps_stats = await get_nps_analytics(db, business.id)
+                camp_stats = await get_campaign_analytics(db, business.id)
+                gift_cards = await list_gift_cards(db, business.id)
+                generated_cal: dict[str, Any] | None = None
+                if "content calendar" in low and any(
+                    w in low for w in ("generate", "create", "build", "plan")
+                ):
+                    generated_cal = await generate_content_calendar(
+                        db, business, days_ahead=7, platforms=["instagram", "facebook"]
+                    )
+                    actions_taken.append(
+                        f"Generated {generated_cal['calendar_entries']} AI content calendar entries"
+                    )
+                else:
+                    cal_entries = await get_content_calendar(db, business.id)
+                    data["content_calendar_count"] = len(cal_entries)
+
+                active_gc_balance = round(
+                    sum(g["remaining_amount"] for g in gift_cards if g["status"] == "active"), 2
+                )
+                data["loyalty_analytics"] = loy_stats
+                data["nps_analytics"] = nps_stats
+                data["email_campaign_analytics"] = camp_stats
+                data["active_gift_cards"] = len([g for g in gift_cards if g["status"] == "active"])
+                if generated_cal is not None:
+                    data["generated_content_calendar"] = generated_cal
+
+                trace.append(
+                    {
+                        "agent": "LoyaltyEngagementAgent",
+                        "tool": "analyze_loyalty_nps_and_campaigns",
+                        "status": "completed",
+                        "detail": (
+                            f"{loy_stats['total_members']} loyalty members, NPS "
+                            f"{nps_stats['nps_score'] if nps_stats['nps_score'] is not None else 'N/A'}, "
+                            f"{camp_stats['sent_campaigns']} sent email campaigns."
+                        ),
+                    }
+                )
+                nps_disp = (
+                    f"{nps_stats['nps_score']:+.1f} ({nps_stats['total_responses']} responses)"
+                    if nps_stats["nps_score"] is not None
+                    else "No responses yet"
+                )
+                cal_line = (
+                    f"- **Content Calendar:** Generated **{generated_cal['calendar_entries']}** 7-day entries!\n"
+                    if generated_cal is not None
+                    else f"- **Saved Content Calendar Entries:** {data.get('content_calendar_count', 0)}\n"
+                )
+                sections.append(
+                    f"**Loyalty, NPS, Gift Cards & Campaigns for {business.name}:**\n\n"
+                    f"- **Loyalty Members:** {loy_stats['total_members']} "
+                    f"({loy_stats['total_outstanding_points']:,} pts / "
+                    f"${loy_stats['outstanding_liability_dollars']:.2f} liability)\n"
+                    f"- **NPS Score:** {nps_disp}\n"
+                    f"- **Active Gift Cards:** {data['active_gift_cards']} "
+                    f"(${active_gc_balance:.2f} unredeemed balance)\n"
+                    f"- **Email Campaigns:** {camp_stats['sent_campaigns']} sent / "
+                    f"{camp_stats['total_campaigns']} total "
+                    f"(Avg Open: {camp_stats['avg_open_rate_pct']}%)\n"
+                    f"{cal_line}"
                 )
 
             elif step == "analytics_overview":

@@ -108,6 +108,7 @@
     <button class="nav-btn" data-tab="whatsapp" onclick="showTab('whatsapp', this)">📱 WhatsApp Concierge</button>
     <button class="nav-btn" data-tab="crm" onclick="showTab('crm', this)">👥 CRM & Competitors</button>
     <button class="nav-btn" data-tab="growth" onclick="showTab('growth', this)">💰 Growth, Coupons & ROI</button>
+    <button class="nav-btn" data-tab="loyalty" onclick="showTab('loyalty', this)">🌟 Loyalty, NPS & Campaigns</button>
     <button class="nav-btn" data-tab="storefront" onclick="showTab('storefront', this)">🌐 Storefront & QR</button>
     <div style="margin-top:auto; padding-top:0.8rem; border-top:1px solid var(--border);">
       <label>Backend API URL</label>
@@ -285,6 +286,59 @@
       </div>
     </section>
 
+    <!-- LOYALTY, GIFT CARDS, NPS, EMAIL & CONTENT CALENDAR -->
+    <section id="tab-loyalty" style="display:none;">
+      <div class="grid-4" id="loyaltyKpis"></div>
+      <div class="grid-2">
+        <div class="card">
+          <h3 style="margin-top:0;">🌟 Loyalty Leaderboard & Points</h3>
+          <div class="grid-2">
+            <div><label>Customer Email *</label><input id="loyEmail" placeholder="liam.oconnor@example.com" /></div>
+            <div><label>Points *</label><input id="loyPts" type="number" value="150" min="1" max="10000" /></div>
+          </div>
+          <div style="display:flex;gap:0.5rem;margin-bottom:0.85rem;">
+            <button class="btn success" onclick="awardLoyaltyPoints()">➕ Award Points</button>
+            <button class="btn secondary" onclick="redeemLoyaltyPoints()">💸 Redeem Points</button>
+          </div>
+          <div id="loyaltyLeaderboard"></div>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0;">🎁 Digital Gift Cards</h3>
+          <div class="grid-2">
+            <div><label>Amount ($) *</label><input id="gcAmt" type="number" value="50" min="1" /></div>
+            <div><label>Recipient Name</label><input id="gcRecip" placeholder="Elena Rostova" /></div>
+          </div>
+          <button class="btn" onclick="issueGiftCardUi()">🎁 Issue Gift Card</button>
+          <div id="giftCardsList" style="margin-top:0.85rem;"></div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h3 style="margin-top:0;">💬 NPS Score & Customer Surveys</h3>
+          <div class="grid-2">
+            <div><label>Customer Email *</label><input id="npsEmail" placeholder="alex@example.com" /></div>
+            <div><label>Score (0-10) *</label><input id="npsScore" type="number" min="0" max="10" value="9" /></div>
+          </div>
+          <label>Feedback</label>
+          <input id="npsFeedback" placeholder="Loved the service!" />
+          <button class="btn success" onclick="submitNpsUi()">📊 Record NPS</button>
+          <div id="npsSummaryBox" style="margin-top:0.85rem;"></div>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0;">📧 Email Campaigns & AI Content Calendar</h3>
+          <div class="grid-2">
+            <div><label>Campaign Name</label><input id="ecName" placeholder="Weekend VIP Invite" /></div>
+            <div><label>Type</label><select id="ecType"><option value="newsletter">Newsletter</option><option value="promotional">Promotional</option><option value="reengagement">Re-engagement</option><option value="announcement">Announcement</option></select></div>
+          </div>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.85rem;">
+            <button class="btn" onclick="createEmailCampaignUi()">✍️ Create Campaign</button>
+            <button class="btn secondary" onclick="generateCalendarUi()">📆 Generate 7-Day Content Calendar</button>
+          </div>
+          <div id="campaignsAndCalBox"></div>
+        </div>
+      </div>
+    </section>
+
     <!-- STOREFRONT & QR -->
     <section id="tab-storefront" style="display:none;">
       <div class="card">
@@ -325,6 +379,23 @@
       ],
       faqs: [
         { q: "Do you offer promo codes or loyalty rewards?", a: "Yes! Use code LOCAL15 at checkout for 15% off pickup orders." }
+      ],
+      loyaltyAccounts: [
+        { rank: 1, customer_name: "Liam O'Connor", customer_email: "liam.oconnor@example.com", points_balance: 1620, lifetime_points: 1620, tier: "gold", tier_label: "🥇 Gold" },
+        { rank: 2, customer_name: "Ava Chen", customer_email: "ava.chen@example.com", points_balance: 540, lifetime_points: 540, tier: "silver", tier_label: "🥈 Silver" }
+      ],
+      giftCards: [
+        { id: 1, code: "NAPOLI-GIFT-2026", initial_amount: 75, remaining_amount: 50, recipient_name: "Elena Rostova", status: "active" }
+      ],
+      npsSurveys: [
+        { id: 1, customer_email: "elena.r@example.com", score: 10, category: "promoter", feedback: "Wood-fired pizza quality is unmatched!", source: "storefront" },
+        { id: 2, customer_email: "priya.n@example.com", score: 9, category: "promoter", feedback: "Wonderful cozy atmosphere!", source: "widget" }
+      ],
+      emailCampaigns: [
+        { id: 1, name: "Weekend Wood-Fired Specials", subject: "15% Off Pickup + Fresh Burrata Special", campaign_type: "promotional", status: "sent", recipient_count: 142, open_count: 44 }
+      ],
+      contentCalendar: [
+        { id: 1, scheduled_date: "2026-11-27", platform: "instagram", content_type: "post", occasion: "Weekend Special", status: "planned", draft_content: "Fresh Margherita + tiramisu weekend combo ready for pickup!" }
       ],
       waMessages: []
     };
@@ -416,6 +487,7 @@
       await loadWhatsAppHistory();
       await loadCRM();
       await loadGrowth();
+      await loadLoyaltyEngagement();
       renderStorefrontTab();
     }
 
@@ -433,6 +505,7 @@
         whatsapp: 'WhatsApp Business Concierge',
         crm: 'Customer CRM, Loyalty & Competitors',
         growth: 'Revenue ROI, Coupons, Waitlist & Broadcasts',
+        loyalty: 'Loyalty Points, Gift Cards, NPS & Email Campaigns',
         storefront: 'Customer Storefront & Printable QR'
       };
       document.getElementById('pageTitle').textContent = titles[name] || 'BizPresence AI';
@@ -799,6 +872,167 @@
         await apiRequestStrict(`/api/growth/${ACTIVE_BIZ_ID}/faqs/suggest?apply=true`, { method: 'POST' });
       }
       await loadGrowth();
+    }
+
+    async function loadLoyaltyEngagement() {
+      let la, lb, gcards, npsAnalytics, npsList, campAnalytics, campaigns, calendar;
+      if (LIVE_MODE) {
+        [la, lb, gcards, npsAnalytics, npsList, campAnalytics, campaigns, calendar] = await Promise.all([
+          apiFetch(`/api/loyalty/${ACTIVE_BIZ_ID}/points/analytics`),
+          apiFetch(`/api/loyalty/${ACTIVE_BIZ_ID}/points/leaderboard?limit=5`),
+          apiFetch(`/api/loyalty/${ACTIVE_BIZ_ID}/gift-cards`),
+          apiFetch(`/api/loyalty/${ACTIVE_BIZ_ID}/nps/analytics`),
+          apiFetch(`/api/loyalty/${ACTIVE_BIZ_ID}/nps?limit=5`),
+          apiFetch(`/api/loyalty/${ACTIVE_BIZ_ID}/email-campaigns/analytics`),
+          apiFetch(`/api/loyalty/${ACTIVE_BIZ_ID}/email-campaigns`),
+          apiFetch(`/api/loyalty/${ACTIVE_BIZ_ID}/content-calendar`)
+        ]);
+      } else {
+        const totPts = SANDBOX_DB.loyaltyAccounts.reduce((s, a) => s + a.points_balance, 0);
+        la = { total_members: SANDBOX_DB.loyaltyAccounts.length, total_outstanding_points: totPts, outstanding_liability_dollars: +(totPts * 0.01).toFixed(2) };
+        lb = { leaderboard: SANDBOX_DB.loyaltyAccounts };
+        gcards = { gift_cards: SANDBOX_DB.giftCards };
+        const promos = SANDBOX_DB.npsSurveys.filter(s => s.score >= 9).length;
+        const dets = SANDBOX_DB.npsSurveys.filter(s => s.score <= 6).length;
+        const totS = SANDBOX_DB.npsSurveys.length;
+        npsAnalytics = { nps_score: totS ? +(((promos - dets) / totS) * 100).toFixed(1) : null, total_responses: totS };
+        npsList = { surveys: SANDBOX_DB.npsSurveys };
+        campAnalytics = { sent_campaigns: SANDBOX_DB.emailCampaigns.filter(c => c.status === 'sent').length, avg_open_rate_pct: 31.0 };
+        campaigns = { campaigns: SANDBOX_DB.emailCampaigns };
+        calendar = { entries: SANDBOX_DB.contentCalendar };
+      }
+
+      const npsScore = (npsAnalytics && npsAnalytics.nps_score !== null && npsAnalytics.nps_score !== undefined) ? `${npsAnalytics.nps_score}` : 'N/A';
+      document.getElementById('loyaltyKpis').innerHTML = `
+        <div class="card"><div class="muted">Loyalty Members</div><div class="metric-val">${(la && la.total_members) || 0}</div></div>
+        <div class="card"><div class="muted">Outstanding Points</div><div class="metric-val">${(la && la.total_outstanding_points) || 0} ($${Number((la && la.outstanding_liability_dollars) || 0).toFixed(2)})</div></div>
+        <div class="card"><div class="muted">NPS Score</div><div class="metric-val">${escapeHtml(npsScore)}</div></div>
+        <div class="card"><div class="muted">Email Open Rate</div><div class="metric-val">${Number((campAnalytics && campAnalytics.avg_open_rate_pct) || 0).toFixed(1)}%</div></div>
+      `;
+
+      const leaders = (lb && lb.leaderboard) || [];
+      document.getElementById('loyaltyLeaderboard').innerHTML = leaders.map(l =>
+        `<div class="trace-box">#${l.rank} <strong>${escapeHtml(l.customer_name)}</strong> (${escapeHtml(l.tier_label || l.tier)}) — ${l.points_balance} pts</div>`
+      ).join('') || '<div class="muted">No loyalty members yet.</div>';
+
+      const cards = (gcards && gcards.gift_cards) || [];
+      document.getElementById('giftCardsList').innerHTML = cards.map(g =>
+        `<div class="trace-box"><code>${escapeHtml(g.code)}</code> — <strong>$${Number(g.remaining_amount).toFixed(2)}</strong> / $${Number(g.initial_amount).toFixed(2)} <span class="badge b-low">${escapeHtml(g.status)}</span></div>`
+      ).join('') || '<div class="muted">No gift cards issued yet.</div>';
+
+      const surveys = (npsList && npsList.surveys) || [];
+      document.getElementById('npsSummaryBox').innerHTML = surveys.map(s =>
+        `<div class="trace-box"><strong>${s.score}/10</strong> <span class="badge b-med">${escapeHtml(s.category)}</span> — ${escapeHtml(s.customer_email)}<div class="muted">${escapeHtml(s.feedback || '')}</div></div>`
+      ).join('') || '<div class="muted">No NPS surveys yet.</div>';
+
+      const camps = (campaigns && campaigns.campaigns) || [];
+      const calEntries = (calendar && calendar.entries) || [];
+      const campHtml = camps.slice(0, 3).map(c =>
+        `<div class="trace-box">📧 <strong>${escapeHtml(c.name)}</strong> (${escapeHtml(c.status)}) ${c.status !== 'sent' && LIVE_MODE ? `<button class="btn secondary" style="padding:0.2rem 0.5rem;font-size:0.75rem;" onclick="sendCampaignUi(${c.id})">Send Now</button>` : ''}</div>`
+      ).join('') || '<div class="muted">No campaigns yet.</div>';
+      const calHtml = calEntries.slice(0, 4).map(e =>
+        `<div class="trace-box">📆 <strong>${escapeHtml(e.scheduled_date)}</strong> [${escapeHtml(e.platform)}] ${escapeHtml(e.occasion || e.title)}</div>`
+      ).join('') || '<div class="muted">No content calendar entries yet.</div>';
+      document.getElementById('campaignsAndCalBox').innerHTML = `<strong>Email Campaigns:</strong>${campHtml}<strong style="display:block;margin-top:0.65rem;">Content Calendar (${calEntries.length}):</strong>${calHtml}`;
+    }
+
+    async function awardLoyaltyPoints() {
+      const email = document.getElementById('loyEmail').value.trim();
+      const points = parseInt(document.getElementById('loyPts').value || '100', 10);
+      if (!email) return alert('Enter customer email.');
+      if (LIVE_MODE) {
+        try {
+          await apiRequestStrict(`/api/loyalty/${ACTIVE_BIZ_ID}/points/earn`, { method: 'POST', body: JSON.stringify({ customer_email: email, points, description: 'Web UI bonus' }) });
+        } catch (err) { alert(err.message); return; }
+      } else {
+        let acc = SANDBOX_DB.loyaltyAccounts.find(a => a.customer_email === email.toLowerCase());
+        if (!acc) { acc = { rank: SANDBOX_DB.loyaltyAccounts.length + 1, customer_name: email.split('@')[0], customer_email: email.toLowerCase(), points_balance: 0, lifetime_points: 0, tier: 'bronze', tier_label: '🥉 Bronze' }; SANDBOX_DB.loyaltyAccounts.push(acc); }
+        acc.points_balance += points; acc.lifetime_points += points;
+      }
+      await loadLoyaltyEngagement();
+    }
+
+    async function redeemLoyaltyPoints() {
+      const email = document.getElementById('loyEmail').value.trim();
+      const points = parseInt(document.getElementById('loyPts').value || '100', 10);
+      if (!email) return alert('Enter customer email.');
+      if (LIVE_MODE) {
+        try {
+          await apiRequestStrict(`/api/loyalty/${ACTIVE_BIZ_ID}/points/redeem`, { method: 'POST', body: JSON.stringify({ customer_email: email, points, description: 'Web UI redeem' }) });
+        } catch (err) { alert(err.message); return; }
+      } else {
+        const acc = SANDBOX_DB.loyaltyAccounts.find(a => a.customer_email === email.toLowerCase());
+        if (!acc || acc.points_balance < points) return alert('Insufficient points in sandbox.');
+        acc.points_balance -= points;
+      }
+      await loadLoyaltyEngagement();
+    }
+
+    async function issueGiftCardUi() {
+      const amount = parseFloat(document.getElementById('gcAmt').value || '50');
+      const recipient_name = document.getElementById('gcRecip').value.trim() || null;
+      if (LIVE_MODE) {
+        try {
+          await apiRequestStrict(`/api/loyalty/${ACTIVE_BIZ_ID}/gift-cards`, { method: 'POST', body: JSON.stringify({ amount, recipient_name, expires_days: 365 }) });
+        } catch (err) { alert(err.message); return; }
+      } else {
+        const code = 'BIZ-' + Math.random().toString(36).substring(2, 6).toUpperCase() + '-' + Math.random().toString(36).substring(2, 6).toUpperCase();
+        SANDBOX_DB.giftCards.unshift({ id: Date.now(), code, initial_amount: amount, remaining_amount: amount, recipient_name: recipient_name || 'Guest', status: 'active' });
+      }
+      document.getElementById('gcRecip').value = '';
+      await loadLoyaltyEngagement();
+    }
+
+    async function submitNpsUi() {
+      const customer_email = document.getElementById('npsEmail').value.trim();
+      const score = parseInt(document.getElementById('npsScore').value || '9', 10);
+      const feedback = document.getElementById('npsFeedback').value.trim() || null;
+      if (!customer_email) return alert('Enter customer email.');
+      if (LIVE_MODE) {
+        try {
+          await apiRequestStrict(`/api/loyalty/${ACTIVE_BIZ_ID}/nps`, { method: 'POST', body: JSON.stringify({ customer_email, score, feedback, source: 'web_ui' }) });
+        } catch (err) { alert(err.message); return; }
+      } else {
+        const cat = score >= 9 ? 'promoter' : score >= 7 ? 'passive' : 'detractor';
+        SANDBOX_DB.npsSurveys.unshift({ id: Date.now(), customer_email, score, category: cat, feedback, source: 'sandbox' });
+      }
+      document.getElementById('npsFeedback').value = '';
+      await loadLoyaltyEngagement();
+    }
+
+    async function createEmailCampaignUi() {
+      const name = document.getElementById('ecName').value.trim();
+      const campaign_type = document.getElementById('ecType').value;
+      if (!name) return alert('Enter campaign name.');
+      if (LIVE_MODE) {
+        try {
+          await apiRequestStrict(`/api/loyalty/${ACTIVE_BIZ_ID}/email-campaigns`, { method: 'POST', body: JSON.stringify({ name, campaign_type, target_segment: 'all' }) });
+        } catch (err) { alert(err.message); return; }
+      } else {
+        SANDBOX_DB.emailCampaigns.unshift({ id: Date.now(), name, campaign_type, status: 'draft', recipient_count: 0, open_count: 0 });
+      }
+      document.getElementById('ecName').value = '';
+      await loadLoyaltyEngagement();
+    }
+
+    async function sendCampaignUi(id) {
+      if (LIVE_MODE) {
+        try {
+          await apiRequestStrict(`/api/loyalty/${ACTIVE_BIZ_ID}/email-campaigns/${id}/send`, { method: 'POST' });
+        } catch (err) { alert(err.message); return; }
+      }
+      await loadLoyaltyEngagement();
+    }
+
+    async function generateCalendarUi() {
+      if (LIVE_MODE) {
+        try {
+          await apiRequestStrict(`/api/loyalty/${ACTIVE_BIZ_ID}/content-calendar/generate`, { method: 'POST', body: JSON.stringify({ days_ahead: 7, platforms: ['instagram', 'facebook'] }) });
+        } catch (err) { alert(err.message); return; }
+      } else {
+        SANDBOX_DB.contentCalendar.unshift({ id: Date.now(), scheduled_date: '2026-11-28', platform: 'instagram', occasion: 'Weekend Special', status: 'planned' });
+      }
+      await loadLoyaltyEngagement();
     }
 
     function renderStorefrontTab() {

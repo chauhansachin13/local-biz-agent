@@ -418,6 +418,47 @@ async def public_business_storefront(
         <div id="revMsg" class="msg"></div>
       </form>
       </section>
+
+      <section class="card" id="nps">
+      <h2>💬 Quick Feedback (0–10)</h2>
+      <p style="color:#64748b;margin-bottom:1rem;">How likely are you to recommend us to a friend? (0 = Not likely, 10 = Extremely likely)</p>
+      <form id="npsForm">
+        <div class="grid-2">
+          <div><label>Your Email *</label><input id="npsEmail" type="email" required placeholder="you@example.com" /></div>
+          <div><label>Your Name</label><input id="npsName" placeholder="Optional" /></div>
+        </div>
+        <label>Score (0–10) *</label>
+        <input id="npsScore" type="number" min="0" max="10" required placeholder="8" style="max-width:120px;" />
+        <label>Tell us more (optional)</label>
+        <textarea id="npsFeedback" rows="2" placeholder="What can we improve?"></textarea>
+        <button type="submit" style="background:#7c3aed;">Submit Feedback</button>
+        <div id="npsMsg" class="msg"></div>
+      </form>
+      </section>
+
+      <section class="card" id="loyalty">
+      <h2>🌟 Loyalty Points Balance</h2>
+      <p style="color:#64748b;margin-bottom:1rem;">Check your points balance and membership tier.</p>
+      <form id="loyaltyForm">
+        <div class="grid-2">
+          <div><label>Your Email *</label><input id="loyaltyEmail" type="email" required placeholder="you@example.com" /></div>
+          <div><label>Your Name</label><input id="loyaltyName" placeholder="Optional — registers you if new" /></div>
+        </div>
+        <button type="submit" style="background:#059669;">Check / Join Loyalty Program</button>
+        <div id="loyaltyMsg" class="msg"></div>
+      </form>
+      </section>
+
+      <section class="card" id="giftcard">
+      <h2>🎁 Check Gift Card Balance</h2>
+      <form id="giftCardForm">
+        <label>Gift Card Code *</label>
+        <input id="gcCode" required placeholder="XXXX-XXXX-XXXX-XXXX" style="max-width:280px;font-family:monospace;" />
+        <button type="submit" style="background:#0f172a;">Check Balance</button>
+        <div id="gcMsg" class="msg"></div>
+      </form>
+      </section>
+
     </div>
   </main>
 
@@ -549,6 +590,80 @@ async def public_business_storefront(
       }} else {{
         msg.className = 'msg err';
         msg.textContent = data.detail || 'Could not submit review.';
+      }}
+    }});
+
+    // NPS Survey submit
+    document.getElementById('npsForm').addEventListener('submit', async (e) => {{
+      e.preventDefault();
+      const msg = document.getElementById('npsMsg');
+      msg.className = 'msg';
+      const score = parseInt(document.getElementById('npsScore').value, 10);
+      if (isNaN(score) || score < 0 || score > 10) {{
+        msg.className = 'msg err';
+        msg.textContent = 'Please enter a score between 0 and 10.';
+        return;
+      }}
+      const resp = await fetch(`/api/loyalty/${{BIZ_ID}}/nps`, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{
+          customer_email: document.getElementById('npsEmail').value,
+          customer_name: document.getElementById('npsName').value || null,
+          score: score,
+          feedback: document.getElementById('npsFeedback').value || null,
+          source: 'storefront'
+        }})
+      }});
+      const data = await resp.json();
+      if (resp.ok) {{
+        msg.className = 'msg ok';
+        const cat = data.category ? ` (You are a ${{data.category}}!)` : '';
+        msg.textContent = `Thank you!${{cat}} ${{data.follow_up_suggestion || ''}}`;
+        document.getElementById('npsForm').reset();
+      }} else {{
+        msg.className = 'msg err';
+        msg.textContent = data.detail || 'Could not submit survey.';
+      }}
+    }});
+
+    // Loyalty points check
+    document.getElementById('loyaltyForm').addEventListener('submit', async (e) => {{
+      e.preventDefault();
+      const msg = document.getElementById('loyaltyMsg');
+      msg.className = 'msg';
+      const email = document.getElementById('loyaltyEmail').value;
+      const name = document.getElementById('loyaltyName').value || 'Customer';
+      const resp = await fetch(`/api/loyalty/${{BIZ_ID}}/points/account`, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ customer_email: email, customer_name: name }})
+      }});
+      const data = await resp.json();
+      if (resp.ok) {{
+        msg.className = 'msg ok';
+        const tierEmoji = {{bronze:'🥉',silver:'🥈',gold:'🥇',platinum:'💎'}}[data.tier] || '⭐';
+        msg.textContent = `${{tierEmoji}} ${{data.tier.toUpperCase()}} Member | Balance: ${{data.points_balance}} pts (≈ $${{(data.points_balance * 0.01).toFixed(2)}}) | Lifetime: ${{data.lifetime_points}} pts`;
+      }} else {{
+        msg.className = 'msg err';
+        msg.textContent = data.detail || 'Could not look up account.';
+      }}
+    }});
+
+    // Gift card check
+    document.getElementById('giftCardForm').addEventListener('submit', async (e) => {{
+      e.preventDefault();
+      const msg = document.getElementById('gcMsg');
+      msg.className = 'msg';
+      const code = document.getElementById('gcCode').value.trim().toUpperCase();
+      const resp = await fetch(`/api/loyalty/${{BIZ_ID}}/gift-cards/${{encodeURIComponent(code)}}`);
+      const data = await resp.json();
+      if (resp.ok) {{
+        msg.className = 'msg ok';
+        msg.textContent = `Gift Card ${{data.code}}: $${{data.remaining_amount.toFixed(2)}} remaining (Status: ${{data.status}})`;
+      }} else {{
+        msg.className = 'msg err';
+        msg.textContent = data.detail || 'Gift card not found.';
       }}
     }});
   </script>

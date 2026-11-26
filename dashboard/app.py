@@ -294,6 +294,9 @@ with st.sidebar:
         "📅 Bookings & Orders",
         "👥 CRM & Competitors",
         "💰 Growth, Coupons & ROI",
+        "🌟 Loyalty, NPS & Gift Cards",
+        "📧 Email Campaigns",
+        "📆 Content Calendar",
         "🌐 Customer Storefront",
         "⚙️ Settings",
     ]
@@ -2051,6 +2054,434 @@ elif page == "💰 Growth, Coupons & ROI" and selected_business:
 
 
 # ---------------------------------------------------------------------------
+# PAGE 9: Customer Storefront & Catalog
+# ---------------------------------------------------------------------------
+
+elif page == "🌟 Loyalty, NPS & Gift Cards" and selected_business:
+    biz_id = selected_business["id"]
+    render_header(selected_business, "Loyalty Points, NPS Surveys & Gift Cards")
+
+    tab_loy, tab_nps, tab_gc = st.tabs(["🌟 Loyalty Points", "💬 NPS Surveys", "🎁 Gift Cards"])
+
+    with tab_loy:
+        st.subheader("Loyalty Program Analytics")
+        ok_la, la = api_request("GET", f"/api/loyalty/{biz_id}/points/analytics")
+        if ok_la and la:
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Total Members", la.get("total_members", 0))
+            col2.metric("Active Members", la.get("active_members", 0))
+            col3.metric("Outstanding Points", f"{la.get('total_outstanding_points', 0):,}")
+            col4.metric("Liability ($)", f"${la.get('outstanding_liability_dollars', 0):.2f}")
+            tier_data = la.get("tier_breakdown", {})
+            if tier_data:
+                tier_df = pd.DataFrame(list(tier_data.items()), columns=["Tier", "Count"])
+                st.bar_chart(tier_df.set_index("Tier"))
+        else:
+            st.info("No loyalty data yet. Customers can join via the storefront.")
+
+        st.subheader("🏆 Loyalty Leaderboard")
+        ok_lb, lb = api_request("GET", f"/api/loyalty/{biz_id}/points/leaderboard?limit=10")
+        if ok_lb and lb and lb.get("leaderboard"):
+            lb_df = pd.DataFrame(lb["leaderboard"])
+            st.dataframe(
+                lb_df[["rank", "customer_name", "tier_label", "points_balance", "lifetime_points"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("No loyalty members yet.")
+
+        loy_col1, loy_col2 = st.columns(2)
+        with loy_col1:
+            st.subheader("Award Points Manually")
+            with st.form("earn_pts_form"):
+                ep_email = st.text_input("Customer Email *")
+                ep_pts = st.number_input("Points to Award", min_value=1, max_value=10000, value=100)
+                ep_desc = st.text_input("Description", value="Manual bonus points")
+                if st.form_submit_button("Award Points", type="primary"):
+                    if ep_email:
+                        ok_ep, ep_res = api_request(
+                            "POST",
+                            f"/api/loyalty/{biz_id}/points/earn",
+                            json_body={
+                                "customer_email": ep_email,
+                                "points": int(ep_pts),
+                                "description": ep_desc,
+                            },
+                        )
+                        if ok_ep:
+                            st.success(
+                                f"Awarded {ep_pts} pts to {ep_email}. New balance: {ep_res.get('new_balance', '?')} | Tier: {ep_res.get('tier_label', '?')}"
+                            )
+                        else:
+                            st.error(ep_res)
+                    else:
+                        st.warning("Email is required.")
+
+        with loy_col2:
+            st.subheader("Redeem Member Points")
+            with st.form("redeem_pts_form"):
+                rp_email = st.text_input("Member Email *")
+                rp_pts = st.number_input(
+                    "Points to Redeem", min_value=10, max_value=50000, value=100
+                )
+                rp_desc = st.text_input("Redemption Note", value="In-store reward discount")
+                if st.form_submit_button("Redeem Points"):
+                    if rp_email:
+                        ok_rp, rp_res = api_request(
+                            "POST",
+                            f"/api/loyalty/{biz_id}/points/redeem",
+                            json_body={
+                                "customer_email": rp_email,
+                                "points": int(rp_pts),
+                                "description": rp_desc,
+                            },
+                        )
+                        if ok_rp:
+                            st.success(
+                                f"Redeemed {rp_pts} pts (${rp_res.get('dollar_value', 0):.2f} value). Remaining: {rp_res.get('remaining_balance', 0)}"
+                            )
+                        else:
+                            st.error(rp_res)
+                    else:
+                        st.warning("Email is required.")
+
+    with tab_nps:
+        st.subheader("Net Promoter Score Analytics")
+        ok_nps, nps = api_request("GET", f"/api/loyalty/{biz_id}/nps/analytics")
+        if ok_nps and nps and nps.get("total_responses", 0) > 0:
+            col1, col2, col3, col4 = st.columns(4)
+            score = nps.get("nps_score")
+            col1.metric("NPS Score", f"{score:+.1f}" if score is not None else "N/A")
+            col2.metric(
+                "Promoters", f"{nps.get('promoters', 0)} ({nps.get('promoter_pct', 0):.1f}%)"
+            )
+            col3.metric("Passives", nps.get("passives", 0))
+            col4.metric(
+                "Detractors", f"{nps.get('detractors', 0)} ({nps.get('detractor_pct', 0):.1f}%)"
+            )
+            st.metric("Avg Score", nps.get("avg_score", 0))
+            if nps.get("top_praise_tags"):
+                st.write(
+                    "**Top Praise Tags:**",
+                    ", ".join(f"{t[0]} ({t[1]})" for t in nps["top_praise_tags"]),
+                )
+            if nps.get("top_complaint_tags"):
+                st.write(
+                    "**Top Complaint Tags:**",
+                    ", ".join(f"{t[0]} ({t[1]})" for t in nps["top_complaint_tags"]),
+                )
+        else:
+            st.info("No NPS responses yet. Customers can submit via the storefront NPS widget.")
+
+        ok_nl, nl_res = api_request("GET", f"/api/loyalty/{biz_id}/nps")
+        if ok_nl and nl_res and nl_res.get("surveys"):
+            st.subheader("Recent Survey Responses")
+            st.dataframe(
+                pd.DataFrame(nl_res["surveys"])[
+                    ["score", "category", "customer_email", "feedback", "source"]
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        st.subheader("Submit Test NPS Survey")
+        with st.form("nps_test_form"):
+            n1, n2 = st.columns(2)
+            nps_email = n1.text_input("Customer Email *")
+            nps_score = n2.number_input("Score (0–10) *", min_value=0, max_value=10, value=8)
+            nps_feedback = st.text_area("Feedback (optional)")
+            if st.form_submit_button("Submit NPS", type="primary"):
+                if nps_email:
+                    ok_ns, ns_res = api_request(
+                        "POST",
+                        f"/api/loyalty/{biz_id}/nps",
+                        json_body={
+                            "customer_email": nps_email,
+                            "score": int(nps_score),
+                            "feedback": nps_feedback or None,
+                            "source": "dashboard",
+                        },
+                    )
+                    if ok_ns:
+                        st.success(
+                            f"Category: **{ns_res.get('category', '?').upper()}** | {ns_res.get('follow_up_suggestion', '')}"
+                        )
+                    else:
+                        st.error(ns_res)
+                else:
+                    st.warning("Email required.")
+
+    with tab_gc:
+        st.subheader("Issued Gift Cards")
+        ok_glist, glist_res = api_request("GET", f"/api/loyalty/{biz_id}/gift-cards")
+        if ok_glist and glist_res and glist_res.get("gift_cards"):
+            st.dataframe(
+                pd.DataFrame(glist_res["gift_cards"])[
+                    ["code", "initial_amount", "remaining_amount", "recipient_name", "status"]
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("No gift cards issued yet.")
+
+        st.subheader("Issue a Digital Gift Card")
+        with st.form("gc_issue_form"):
+            gc1, gc2 = st.columns(2)
+            gc_amount = gc1.number_input(
+                "Amount ($) *", min_value=1.0, max_value=10000.0, value=50.0
+            )
+            gc_expires = gc2.number_input(
+                "Expires In (days)", min_value=1, max_value=1825, value=365
+            )
+            gc3, gc4 = st.columns(2)
+            gc_recipient_email = gc3.text_input("Recipient Email")
+            gc_recipient_name = gc4.text_input("Recipient Name")
+            gc_sender_email = gc3.text_input("Sender Email")
+            gc_message = st.text_area("Personal Message", max_chars=1000)
+            if st.form_submit_button("Issue Gift Card 🎁", type="primary"):
+                ok_gc, gc_res = api_request(
+                    "POST",
+                    f"/api/loyalty/{biz_id}/gift-cards",
+                    json_body={
+                        "amount": float(gc_amount),
+                        "recipient_email": gc_recipient_email or None,
+                        "recipient_name": gc_recipient_name or None,
+                        "sender_email": gc_sender_email or None,
+                        "message": gc_message or None,
+                        "expires_days": int(gc_expires),
+                    },
+                )
+                if ok_gc:
+                    st.success(
+                        f"✅ Gift Card Issued! Code: **{gc_res.get('code')}** | Amount: ${gc_res.get('amount')} | Expires: {gc_res.get('expires_at', '')[:10]}"
+                    )
+                else:
+                    st.error(gc_res)
+
+        gc_col1, gc_col2 = st.columns(2)
+        with gc_col1:
+            st.subheader("Look Up Gift Card")
+            gc_lookup_code = st.text_input("Gift Card Code", placeholder="XXXX-XXXX-XXXX-XXXX")
+            if st.button("Check Balance"):
+                if gc_lookup_code:
+                    ok_gcl, gcl_res = api_request(
+                        "GET", f"/api/loyalty/{biz_id}/gift-cards/{gc_lookup_code.strip().upper()}"
+                    )
+                    if ok_gcl:
+                        st.info(
+                            f"Code: **{gcl_res.get('code')}** | Remaining: **${gcl_res.get('remaining_amount')}** | Status: {gcl_res.get('status')}"
+                        )
+                    else:
+                        st.error(gcl_res)
+                else:
+                    st.warning("Enter a gift card code.")
+        with gc_col2:
+            st.subheader("Redeem Gift Card")
+            with st.form("gc_redeem_form"):
+                gcr_code = st.text_input("Code to Redeem *", placeholder="XXXX-XXXX-XXXX-XXXX")
+                gcr_amt = st.number_input(
+                    "Redeem Amount ($)", min_value=0.5, max_value=10000.0, value=10.0
+                )
+                if st.form_submit_button("Apply Gift Card"):
+                    if gcr_code.strip():
+                        ok_gcr, gcr_res = api_request(
+                            "POST",
+                            f"/api/loyalty/{biz_id}/gift-cards/redeem",
+                            json_body={"code": gcr_code.strip().upper(), "amount": float(gcr_amt)},
+                        )
+                        if ok_gcr:
+                            st.success(
+                                f"Applied ${gcr_amt:.2f}! Remaining: ${gcr_res.get('remaining_balance', 0):.2f} ({gcr_res.get('status')})"
+                            )
+                        else:
+                            st.error(gcr_res)
+                    else:
+                        st.warning("Enter a valid gift card code.")
+
+
+elif page == "📧 Email Campaigns" and selected_business:
+    biz_id = selected_business["id"]
+    render_header(selected_business, "Email Campaigns & Newsletter Studio")
+
+    tab_create, tab_analytics = st.tabs(["✍️ Create & Manage Campaigns", "📊 Analytics"])
+
+    with tab_create:
+        st.subheader("Existing Campaigns")
+        ok_clist, clist = api_request("GET", f"/api/loyalty/{biz_id}/email-campaigns")
+        if ok_clist and clist and clist.get("campaigns"):
+            st.dataframe(
+                pd.DataFrame(clist["campaigns"])[
+                    [
+                        "id",
+                        "name",
+                        "campaign_type",
+                        "target_segment",
+                        "status",
+                        "recipient_count",
+                        "open_count",
+                    ]
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        st.subheader("New Email Campaign")
+        with st.form("email_campaign_form"):
+            camp_name = st.text_input("Campaign Name *", placeholder="November Newsletter")
+            ec1, ec2 = st.columns(2)
+            camp_type = ec1.selectbox(
+                "Campaign Type", ["newsletter", "promotional", "reengagement", "announcement"]
+            )
+            camp_segment = ec2.selectbox("Target Segment", ["all", "loyal", "new", "vip"])
+            camp_subject = st.text_input("Subject Line (leave blank to auto-generate)")
+            camp_body = st.text_area("Email Body HTML (leave blank to auto-generate)", height=150)
+            camp_schedule = st.text_input("Schedule (ISO datetime, leave blank to save as draft)")
+            submitted = st.form_submit_button("Create Campaign", type="primary")
+            if submitted:
+                payload = {
+                    "name": camp_name,
+                    "campaign_type": camp_type,
+                    "target_segment": camp_segment,
+                    "subject": camp_subject or None,
+                    "body_html": camp_body or None,
+                    "scheduled_at": camp_schedule or None,
+                }
+                ok_cc, cc_res = api_request(
+                    "POST", f"/api/loyalty/{biz_id}/email-campaigns", json_body=payload
+                )
+                if ok_cc:
+                    st.success(
+                        f"✅ Campaign '{cc_res.get('name')}' created (ID #{cc_res.get('id')}) — Status: {cc_res.get('status')}"
+                    )
+                    st.write("**Subject:**", cc_res.get("subject"))
+                    st.markdown(
+                        f"[🔗 Open HTML Email Preview]({API_BASE_URL}{cc_res.get('preview_url', '')})"
+                    )
+                else:
+                    st.error(cc_res)
+
+        st.subheader("Send a Campaign")
+        camp_id_send = st.number_input("Campaign ID to Send", min_value=1, step=1)
+        if st.button("🚀 Send Now", type="primary"):
+            ok_cs, cs_res = api_request(
+                "POST", f"/api/loyalty/{biz_id}/email-campaigns/{int(camp_id_send)}/send"
+            )
+            if ok_cs:
+                st.success(
+                    f"Sent to **{cs_res.get('recipient_count')}** recipients | Opens: {cs_res.get('open_count')} | Clicks: {cs_res.get('click_count')}"
+                )
+            else:
+                st.error(cs_res)
+
+    with tab_analytics:
+        st.subheader("Campaign Performance Analytics")
+        ok_ca, ca = api_request("GET", f"/api/loyalty/{biz_id}/email-campaigns/analytics")
+        if ok_ca and ca:
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Total Campaigns", ca.get("total_campaigns", 0))
+            col2.metric("Sent", ca.get("sent_campaigns", 0))
+            col3.metric("Avg Open Rate", f"{ca.get('avg_open_rate_pct', 0):.1f}%")
+            col4.metric("Avg Click Rate", f"{ca.get('avg_click_rate_pct', 0):.1f}%")
+            by_type = ca.get("by_type", {})
+            if any(v > 0 for v in by_type.values()):
+                type_df = pd.DataFrame(list(by_type.items()), columns=["Type", "Count"])
+                type_df = type_df[type_df["Count"] > 0]
+                st.bar_chart(type_df.set_index("Type"))
+        else:
+            st.info("No campaigns sent yet.")
+
+
+elif page == "📆 Content Calendar" and selected_business:
+    biz_id = selected_business["id"]
+    render_header(selected_business, "AI Content Calendar & Social Planner")
+
+    tab_gen, tab_view = st.tabs(["🤖 Generate Calendar", "📋 View & Promote Calendar"])
+
+    with tab_gen:
+        st.subheader("AI-Generate a Multi-Platform Content Calendar")
+        with st.form("content_cal_form"):
+            cg1, cg2 = st.columns(2)
+            cal_days = cg1.number_input("Days Ahead", min_value=1, max_value=90, value=7)
+            all_platforms = ["instagram", "facebook", "twitter", "email"]
+            cal_platforms = st.multiselect(
+                "Platforms", all_platforms, default=["instagram", "facebook"]
+            )
+            if st.form_submit_button("⚡ Generate Calendar", type="primary"):
+                if not cal_platforms:
+                    st.warning("Select at least one platform.")
+                else:
+                    ok_cg, cg_res = api_request(
+                        "POST",
+                        f"/api/loyalty/{biz_id}/content-calendar/generate",
+                        json_body={"days_ahead": int(cal_days), "platforms": cal_platforms},
+                    )
+                    if ok_cg:
+                        st.success(
+                            f"Generated **{cg_res.get('calendar_entries', 0)}** content entries across {cal_days} days for {', '.join(cal_platforms)}!"
+                        )
+                        entries = cg_res.get("entries", [])
+                        for entry in entries[:6]:
+                            with st.expander(
+                                f"#{entry.get('id')} | {entry.get('date')} | {entry.get('platform').upper()} | {entry.get('occasion')} (Confidence: {entry.get('confidence', 0):.0%})"
+                            ):
+                                st.write(entry.get("preview"))
+                                st.write("**Hashtags:**", " ".join(entry.get("hashtags", [])))
+                    else:
+                        st.error(cg_res)
+
+    with tab_view:
+        st.subheader("Saved Content Calendar")
+        plat_filter = st.selectbox(
+            "Filter by Platform", ["All", "instagram", "facebook", "twitter", "email"]
+        )
+        plat_param = None if plat_filter == "All" else plat_filter
+        url = f"/api/loyalty/{biz_id}/content-calendar"
+        if plat_param:
+            url += f"?platform={plat_param}"
+        ok_cv, cv_res = api_request("GET", url)
+        if ok_cv and cv_res and cv_res.get("entries"):
+            entries = cv_res["entries"]
+            st.caption(f"{cv_res.get('total', 0)} entries found")
+            cal_df = pd.DataFrame(
+                [
+                    {
+                        "ID": e.get("id"),
+                        "Date": e.get("scheduled_date"),
+                        "Platform": e.get("platform"),
+                        "Type": e.get("content_type"),
+                        "Occasion": e.get("occasion"),
+                        "Status": e.get("status"),
+                        "Confidence": f"{e.get('ai_confidence_score', 0):.0%}",
+                        "Preview": e.get("draft_content", "")[:80] + "...",
+                    }
+                    for e in entries
+                ]
+            )
+            st.dataframe(cal_df, use_container_width=True, hide_index=True)
+
+            pr_col1, pr_col2 = st.columns([1.2, 1.0])
+            promo_entry_id = pr_col1.number_input(
+                "Entry ID to Promote to Social Post", min_value=1, step=1
+            )
+            promo_pub = pr_col2.checkbox("Publish Immediately", value=False)
+            if st.button("📣 Promote Entry to Social Queue"):
+                ok_pr, pr_res = api_request(
+                    "POST",
+                    f"/api/loyalty/{biz_id}/content-calendar/{int(promo_entry_id)}/promote",
+                    json_body={"auto_publish": promo_pub},
+                )
+                if ok_pr:
+                    st.success(
+                        f"Promoted entry #{promo_entry_id} -> SocialPost #{pr_res.get('social_post_id')} ({pr_res.get('social_status')})!"
+                    )
+                else:
+                    st.error(pr_res)
+        else:
+            st.info("No content calendar entries yet. Use the Generate tab to create them.")
+
+
 # PAGE 9: Customer Storefront & Catalog
 # ---------------------------------------------------------------------------
 

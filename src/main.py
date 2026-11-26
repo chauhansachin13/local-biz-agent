@@ -126,6 +126,8 @@ async def root() -> dict:
             "bookings": "/api/bookings",
             "orders": "/api/orders",
             "crm": "/api/crm",
+            "growth": "/api/growth",
+            "loyalty": "/api/loyalty",
             "whatsapp": "/api/whatsapp",
             "agent": "/api/agent",
             "storefront": "/site/{business_id}",

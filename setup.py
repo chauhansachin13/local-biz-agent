@@ -30,7 +30,7 @@ setup(
         "langgraph>=0.2.0",
         "sqlalchemy[asyncio]>=2.0.35",
         "aiosqlite>=0.20.0",
-        "pydantic>=2.9.0",
+        "pydantic[email]>=2.9.0",
         "pydantic-settings>=2.6.0",
         "python-dotenv>=1.0.1",
         "streamlit>=1.39.0",

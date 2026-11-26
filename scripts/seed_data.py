@@ -38,6 +38,19 @@ from src.models.growth_models import (  # noqa: E402
     WaitlistEntry,
     WaitlistStatus,
 )
+from src.models.loyalty_models import (  # noqa: E402
+    ContentCalendarEntry,
+    EmailCampaign,
+    EmailCampaignStatus,
+    EmailCampaignType,
+    GiftCard,
+    GiftCardStatus,
+    LoyaltyAccount,
+    LoyaltyTier,
+    LoyaltyTransaction,
+    LoyaltyTransactionType,
+    NPSSurvey,
+)
 from src.models.review import ResponseStatus, Review, Sentiment  # noqa: E402
 from src.models.social_post import PostStatus, SocialPlatform, SocialPost  # noqa: E402
 
@@ -53,6 +66,12 @@ def seed_database(reset: bool = True) -> None:
 
     with Session(engine) as db:
         if reset:
+            db.query(ContentCalendarEntry).delete()
+            db.query(EmailCampaign).delete()
+            db.query(NPSSurvey).delete()
+            db.query(GiftCard).delete()
+            db.query(LoyaltyTransaction).delete()
+            db.query(LoyaltyAccount).delete()
             db.query(WaitlistEntry).delete()
             db.query(CouponOffer).delete()
             db.query(WhatsAppMessage).delete()
@@ -633,10 +652,138 @@ def seed_database(reset: bool = True) -> None:
                 ),
             ]
         )
+
+        # Loyalty accounts, Gift Cards, NPS Surveys, Email Campaigns & Content Calendar
+        liam_acc = LoyaltyAccount(
+            business_id=restaurant.id,
+            customer_email="liam.oconnor@example.com",
+            customer_name="Liam O'Connor",
+            points_balance=1620,
+            lifetime_points=1620,
+            tier=LoyaltyTier.GOLD,
+        )
+        ava_acc = LoyaltyAccount(
+            business_id=restaurant.id,
+            customer_email="ava.chen@example.com",
+            customer_name="Ava Chen",
+            points_balance=540,
+            lifetime_points=540,
+            tier=LoyaltyTier.SILVER,
+        )
+        chloe_acc = LoyaltyAccount(
+            business_id=salon.id,
+            customer_email="chloe.bennett@example.com",
+            customer_name="Chloe Bennett",
+            points_balance=780,
+            lifetime_points=780,
+            tier=LoyaltyTier.SILVER,
+        )
+        db.add_all([liam_acc, ava_acc, chloe_acc])
+        db.flush()
+
+        db.add_all(
+            [
+                LoyaltyTransaction(
+                    account_id=liam_acc.id,
+                    business_id=restaurant.id,
+                    transaction_type=LoyaltyTransactionType.EARN,
+                    points=1620,
+                    description="VIP dining & catering points",
+                    balance_after=1620,
+                ),
+                LoyaltyTransaction(
+                    account_id=ava_acc.id,
+                    business_id=restaurant.id,
+                    transaction_type=LoyaltyTransactionType.EARN,
+                    points=540,
+                    description="Repeat weekend orders",
+                    balance_after=540,
+                ),
+                GiftCard(
+                    business_id=restaurant.id,
+                    code="NAPOLI-GIFT-2026",
+                    initial_amount=75.0,
+                    remaining_amount=50.0,
+                    recipient_email="elena.rostova@example.com",
+                    recipient_name="Elena Rostova",
+                    sender_email="liam.oconnor@example.com",
+                    message="Enjoy dinner at Bella Napoli!",
+                    status=GiftCardStatus.ACTIVE,
+                    expires_at=now + timedelta(days=300),
+                ),
+                GiftCard(
+                    business_id=salon.id,
+                    code="LUMINA-SPA-50",
+                    initial_amount=50.0,
+                    remaining_amount=50.0,
+                    recipient_email="nadia.patel@example.com",
+                    recipient_name="Nadia Patel",
+                    sender_email="chloe.bennett@example.com",
+                    message="Treat yourself to a botanical scalp ritual!",
+                    status=GiftCardStatus.ACTIVE,
+                    expires_at=now + timedelta(days=365),
+                ),
+                NPSSurvey(
+                    business_id=restaurant.id,
+                    customer_email="elena.r@example.com",
+                    customer_name="Elena Rodriguez",
+                    score=10,
+                    category="promoter",
+                    feedback="Friendly staff and wood-fired pizza quality is unmatched!",
+                    tags=["staff", "quality"],
+                    source="storefront",
+                ),
+                NPSSurvey(
+                    business_id=restaurant.id,
+                    customer_email="priya.n@example.com",
+                    customer_name="Priya Nair",
+                    score=9,
+                    category="promoter",
+                    feedback="Wonderful cozy atmosphere and fresh truffle pasta.",
+                    tags=["quality"],
+                    source="widget",
+                ),
+                NPSSurvey(
+                    business_id=restaurant.id,
+                    customer_email="marcus.v@example.com",
+                    customer_name="Marcus Vance",
+                    score=5,
+                    category="detractor",
+                    feedback="Wait time on Friday night was too slow.",
+                    tags=["wait_time"],
+                    source="email",
+                ),
+                EmailCampaign(
+                    business_id=restaurant.id,
+                    name="Weekend Wood-Fired Specials",
+                    subject="🍕 15% Off Pickup + Fresh Burrata Special This Weekend!",
+                    body_html="<h2>Ciao Bella Napoli Family!</h2><p>Use code <strong>LOCAL15</strong> on pickup orders over $15.</p>",
+                    campaign_type=EmailCampaignType.PROMOTIONAL,
+                    status=EmailCampaignStatus.SENT,
+                    target_segment="all",
+                    sent_at=now - timedelta(days=3),
+                    recipient_count=142,
+                    open_count=44,
+                    click_count=11,
+                ),
+                ContentCalendarEntry(
+                    business_id=restaurant.id,
+                    title="Weekend Special — Instagram Post",
+                    content_type="post",
+                    platform="instagram",
+                    draft_content="🔥 Weekend Special at Bella Napoli Trattoria! Hand-stretched Margherita + tiramisu combo ready for pickup.",
+                    hashtags=["#BellaNapoli", "#AustinFoodie", "#WoodFiredPizza"],
+                    scheduled_date=(today + timedelta(days=1)).isoformat(),
+                    status="planned",
+                    ai_confidence_score=0.92,
+                    occasion="Weekend Special",
+                ),
+            ]
+        )
         db.commit()
         print(
             "Seed complete: inserted 2 businesses, 10 reviews, 5 social posts, 8 bookings, "
-            "2 orders, 2 competitors, 2 CRM VIP/Regular customers, and 1 HITL approval draft."
+            "2 orders, loyalty accounts, gift cards, NPS surveys, email campaign & calendar entries."
         )
 
 

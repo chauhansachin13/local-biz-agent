@@ -136,3 +136,35 @@ async def sample_booking(db_session: AsyncSession, sample_business: Business) ->
     await db_session.commit()
     await db_session.refresh(booking)
     return booking
+
+
+@pytest_asyncio.fixture(scope="function")
+async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
+    """Alias for test_client — provides httpx AsyncClient wired to test database."""
+
+    async def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
+    app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def test_business_id(client: AsyncClient) -> int:
+    """Create a test business and return its ID."""
+    resp = await client.post(
+        "/api/businesses/",
+        json={
+            "name": "Test Loyalty Bakery",
+            "category": "Bakery",
+            "city": "Austin",
+            "state": "TX",
+            "phone": "+15125550199",
+            "email": "test@testbiz.com",
+        },
+    )
+    assert resp.status_code in (200, 201), f"Failed to create business: {resp.text}"
+    return resp.json()["id"]

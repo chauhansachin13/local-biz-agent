@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.booking_agent import BookingAgent
+from src.agents.loyalty_and_engagement import earn_loyalty_points
 from src.agents.revenue_and_growth import notify_waitlist_for_cancelled_booking
 from src.api.deps import get_business_or_404
 from src.database import get_db
@@ -127,11 +128,27 @@ async def update_booking(
                 detail=f"Time slot {new_date} {new_time.strftime('%H:%M')} is fully booked.",
             )
 
+    was_completed = booking.status == BookingStatus.COMPLETED
     for field, value in updates.items():
         setattr(booking, field, value)
 
     if new_status == BookingStatus.CANCELLED:
         await notify_waitlist_for_cancelled_booking(db, business, booking)
+    elif (
+        new_status == BookingStatus.COMPLETED
+        and not was_completed
+        and booking.customer_email
+        and "@" in booking.customer_email
+    ):
+        await earn_loyalty_points(
+            db,
+            business_id,
+            booking.customer_email,
+            booking.customer_name,
+            25,
+            description=f"Completed booking #{booking.id}: {booking.service}",
+            reference_id=f"booking:{booking.id}",
+        )
 
     await db.commit()
     await db.refresh(booking)
