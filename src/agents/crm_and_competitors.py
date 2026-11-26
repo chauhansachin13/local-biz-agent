@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from datetime import UTC, datetime
@@ -51,127 +52,166 @@ def _identity_keys(name: str | None, phone: str | None, email: str | None) -> li
     return [k for k in (_norm_phone(phone), _norm_email(email), _norm_name(name)) if k]
 
 
-async def sync_customers_from_activity(db: AsyncSession, business_id: int) -> list[CustomerProfile]:
-    """Build or update unified CustomerProfile rows from bookings, orders, and reviews."""
-    existing = list(
-        (
-            await db.execute(
-                select(CustomerProfile).where(CustomerProfile.business_id == business_id)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    existing_index: dict[str, CustomerProfile] = {}
-    for cust in existing:
-        for k in _identity_keys(cust.name, cust.phone, cust.email):
-            existing_index.setdefault(k, cust)
+_CRM_LOCKS: dict[tuple[int, int], asyncio.Lock] = {}
 
-    bookings = list(
-        (
-            await db.execute(
-                select(Booking).where(
-                    Booking.business_id == business_id,
-                    Booking.status != BookingStatus.CANCELLED,
+
+def _get_crm_lock(business_id: int) -> asyncio.Lock:
+    loop_id = id(asyncio.get_running_loop())
+    key = (loop_id, business_id)
+    lock = _CRM_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _CRM_LOCKS[key] = lock
+    return lock
+
+
+async def sync_customers_from_activity(db: AsyncSession, business_id: int) -> list[CustomerProfile]:
+    """Build or update unified CustomerProfile rows from bookings, orders, and reviews safely under concurrency."""
+    async with _get_crm_lock(business_id):
+        existing = list(
+            (
+                await db.execute(
+                    select(CustomerProfile)
+                    .where(CustomerProfile.business_id == business_id)
+                    .order_by(CustomerProfile.id.asc())
                 )
             )
+            .scalars()
+            .all()
         )
-        .scalars()
-        .all()
-    )
-    orders = list(
-        (await db.execute(select(OrderRequest).where(OrderRequest.business_id == business_id)))
-        .scalars()
-        .all()
-    )
-    reviews = list(
-        (await db.execute(select(Review).where(Review.business_id == business_id))).scalars().all()
-    )
-
-    records: list[dict[str, Any]] = []
-    agg_index: dict[str, dict[str, Any]] = {}
-
-    def _accumulate(
-        name: str, phone: str | None, email: str | None, spent: float, dt: datetime | None
-    ) -> None:
-        keys = _identity_keys(name, phone, email)
-        if not keys:
-            return
-        entry = next((agg_index[k] for k in keys if k in agg_index), None)
-        if entry is None:
-            entry = {
-                "name": name,
-                "phone": phone,
-                "email": email,
-                "visits": 0,
-                "spent": 0.0,
-                "last": dt or datetime.now(UTC),
-                "keys": list(keys),
-            }
-            records.append(entry)
-        else:
+        existing_index: dict[str, CustomerProfile] = {}
+        for cust in existing:
+            keys = _identity_keys(cust.name, cust.phone, cust.email)
+            primary = next((existing_index[k] for k in keys if k in existing_index), None)
+            if primary is not None and primary is not cust:
+                primary.visit_count = max(primary.visit_count, cust.visit_count)
+                primary.total_spent = max(primary.total_spent, cust.total_spent)
+                primary.loyalty_points = max(primary.loyalty_points, cust.loyalty_points)
+                if cust.phone and not primary.phone:
+                    primary.phone = cust.phone
+                if cust.email and not primary.email:
+                    primary.email = cust.email
+                primary.segment = _classify_segment(primary.visit_count, primary.total_spent)
+                await db.delete(cust)
+                target = primary
+            else:
+                target = cust
             for k in keys:
-                if k not in entry["keys"]:
-                    entry["keys"].append(k)
-        for k in keys:
-            agg_index[k] = entry
+                existing_index[k] = target
 
-        entry["visits"] += 1
-        entry["spent"] += spent
-        if phone and not entry["phone"]:
-            entry["phone"] = phone
-        if email and not entry["email"]:
-            entry["email"] = email
-
-    for b in bookings:
-        _accumulate(b.customer_name, b.customer_phone, b.customer_email, 35.0, b.created_at)
-    for o in orders:
-        _accumulate(
-            o.customer_name, o.customer_phone, o.customer_email, float(o.total_amount), o.created_at
-        )
-    for r in reviews:
-        _accumulate(r.reviewer_name, None, None, 0.0, r.created_at)
-
-    now = datetime.now(UTC)
-    for info in records:
-        cust = next((existing_index[k] for k in info["keys"] if k in existing_index), None)
-        if cust is not None:
-            cust.visit_count = max(cust.visit_count, info["visits"])
-            cust.total_spent = max(cust.total_spent, round(info["spent"], 2))
-            cust.loyalty_points = cust.visit_count * 15 + int(cust.total_spent)
-            cust.segment = _classify_segment(cust.visit_count, cust.total_spent)
-            if info["phone"] and not cust.phone:
-                cust.phone = info["phone"]
-            if info["email"] and not cust.email:
-                cust.email = info["email"]
-        else:
-            cust = CustomerProfile(
-                business_id=business_id,
-                name=info["name"],
-                phone=info["phone"],
-                email=info["email"],
-                visit_count=info["visits"],
-                total_spent=round(info["spent"], 2),
-                loyalty_points=info["visits"] * 15 + int(info["spent"]),
-                segment=_classify_segment(info["visits"], info["spent"]),
-                last_visit_at=info["last"] or now,
+        bookings = list(
+            (
+                await db.execute(
+                    select(Booking).where(
+                        Booking.business_id == business_id,
+                        Booking.status != BookingStatus.CANCELLED,
+                    )
+                )
             )
-            db.add(cust)
-        for k in info["keys"]:
-            existing_index[k] = cust
-
-    await db.flush()
-    return list(
-        (
-            await db.execute(
-                select(CustomerProfile)
-                .where(CustomerProfile.business_id == business_id)
-                .order_by(CustomerProfile.total_spent.desc(), CustomerProfile.visit_count.desc())
-            )
+            .scalars()
+            .all()
         )
-        .scalars()
-        .all()
-    )
+        orders = list(
+            (await db.execute(select(OrderRequest).where(OrderRequest.business_id == business_id)))
+            .scalars()
+            .all()
+        )
+        reviews = list(
+            (await db.execute(select(Review).where(Review.business_id == business_id)))
+            .scalars()
+            .all()
+        )
+
+        records: list[dict[str, Any]] = []
+        agg_index: dict[str, dict[str, Any]] = {}
+
+        def _accumulate(
+            name: str, phone: str | None, email: str | None, spent: float, dt: datetime | None
+        ) -> None:
+            keys = _identity_keys(name, phone, email)
+            if not keys:
+                return
+            entry = next((agg_index[k] for k in keys if k in agg_index), None)
+            if entry is None:
+                entry = {
+                    "name": name,
+                    "phone": phone,
+                    "email": email,
+                    "visits": 0,
+                    "spent": 0.0,
+                    "last": dt or datetime.now(UTC),
+                    "keys": list(keys),
+                }
+                records.append(entry)
+            else:
+                for k in keys:
+                    if k not in entry["keys"]:
+                        entry["keys"].append(k)
+            for k in keys:
+                agg_index[k] = entry
+
+            entry["visits"] += 1
+            entry["spent"] += spent
+            if phone and not entry["phone"]:
+                entry["phone"] = phone
+            if email and not entry["email"]:
+                entry["email"] = email
+
+        for b in bookings:
+            _accumulate(b.customer_name, b.customer_phone, b.customer_email, 35.0, b.created_at)
+        for o in orders:
+            _accumulate(
+                o.customer_name,
+                o.customer_phone,
+                o.customer_email,
+                float(o.total_amount),
+                o.created_at,
+            )
+        for r in reviews:
+            _accumulate(r.reviewer_name, None, None, 0.0, r.created_at)
+
+        now = datetime.now(UTC)
+        for info in records:
+            cust = next((existing_index[k] for k in info["keys"] if k in existing_index), None)
+            if cust is not None:
+                cust.visit_count = max(cust.visit_count, info["visits"])
+                cust.total_spent = max(cust.total_spent, round(info["spent"], 2))
+                cust.loyalty_points = cust.visit_count * 15 + int(cust.total_spent)
+                cust.segment = _classify_segment(cust.visit_count, cust.total_spent)
+                if info["phone"] and not cust.phone:
+                    cust.phone = info["phone"]
+                if info["email"] and not cust.email:
+                    cust.email = info["email"]
+            else:
+                cust = CustomerProfile(
+                    business_id=business_id,
+                    name=info["name"],
+                    phone=info["phone"],
+                    email=info["email"],
+                    visit_count=info["visits"],
+                    total_spent=round(info["spent"], 2),
+                    loyalty_points=info["visits"] * 15 + int(info["spent"]),
+                    segment=_classify_segment(info["visits"], info["spent"]),
+                    last_visit_at=info["last"] or now,
+                )
+                db.add(cust)
+            for k in info["keys"]:
+                existing_index[k] = cust
+
+        await db.commit()
+        return list(
+            (
+                await db.execute(
+                    select(CustomerProfile)
+                    .where(CustomerProfile.business_id == business_id)
+                    .order_by(
+                        CustomerProfile.total_spent.desc(), CustomerProfile.visit_count.desc()
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
 
 
 async def draft_retention_campaigns(db: AsyncSession, business: Business) -> dict[str, Any]:

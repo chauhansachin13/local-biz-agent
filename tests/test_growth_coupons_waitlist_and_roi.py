@@ -344,3 +344,65 @@ async def test_broadcast_revenue_roi_supervisor_translate_and_menu_page(
     assert "Join the Waitlist" in site_html and "checkPromoCode" in site_html
     app_html = (await test_client.get("/app")).text
     assert "tab-growth" in app_html and "loadGrowth" in app_html
+
+
+async def test_concurrent_crm_sync_and_roi_zero_duplicates(tmp_path) -> None:
+    """Verify parallel calls to CRM sync and revenue analytics never create duplicate CustomerProfile rows."""
+    import asyncio
+
+    from httpx import ASGITransport
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from src.database.db import Base, get_db
+    from src.main import app
+
+    db_file = tmp_path / "crm_race.db"
+    race_engine = create_async_engine(
+        f"sqlite+aiosqlite:///{db_file}",
+        connect_args={"check_same_thread": False},
+    )
+    race_factory = async_sessionmaker(bind=race_engine, class_=AsyncSession, expire_on_commit=False)
+    async with race_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async def override_db():
+        async with race_factory() as sess:
+            yield sess
+
+    app.dependency_overrides[get_db] = override_db
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            onb = await client.post(
+                "/api/agent/magic-onboard",
+                json={"name": "Race Cafe", "category": "cafe", "city": "Pune"},
+            )
+            assert onb.status_code == 201
+            biz_id = onb.json()["business"]["id"]
+
+            await client.post(
+                f"/api/orders/{biz_id}/order",
+                json={
+                    "customer_name": "Kiran Rao",
+                    "customer_phone": "+91-98111-22334",
+                    "items": [{"name": "Masala Chai", "quantity": 2, "price": 5.0}],
+                },
+            )
+            await client.post(
+                f"/api/reviews/{biz_id}/submit",
+                json={"reviewer_name": "Kiran Rao", "rating": 5, "review_text": "Best chai!"},
+            )
+
+            async def call_sync(i: int):
+                if i % 2 == 0:
+                    return await client.get(f"/api/crm/{biz_id}/customers")
+                return await client.get(f"/api/growth/{biz_id}/revenue-analytics")
+
+            resps = await asyncio.gather(*(call_sync(i) for i in range(16)))
+            assert all(r.status_code == 200 for r in resps)
+
+            final_crm = (await client.get(f"/api/crm/{biz_id}/customers")).json()
+            assert len(final_crm) == 1
+            assert final_crm[0]["name"] == "Kiran Rao"
+    finally:
+        app.dependency_overrides.clear()
+        await race_engine.dispose()
